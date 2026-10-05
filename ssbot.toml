@@ -1,0 +1,42 @@
+# ssbot settings (SPEC §11). Every field is optional; these are the defaults.
+
+[browser]
+viewport = [1280, 720]
+profile_dir = "~/.ssbot/chrome"
+url = "https://poki.com/en/g/subway-surfers"
+fullscreen = true      # resize the game iframe to fill the viewport (no side ads)
+direct = false         # open the game iframe's own URL top-level if keys don't reach the iframe
+key_hold_ms = 40
+
+[capture]
+backend = "screencast" # or "native" (build with --features xcap)
+jpeg_quality = 60
+max_width = 640
+work_size = [320, 180]
+
+[policy]
+emergency_ms = 250
+cooldown_ms = 180
+advisor_max_age_ms = 400
+lookahead_ms = 700
+initial_speed_bands_per_s = 3.0
+use_hoverboard = false # Space with 0 hoverboards opens a shop dialog that pauses the game
+
+[advisor]
+enabled = true
+model = "0.8b"
+backend = "mlx"
+python = "../.venv/bin/python"
+script = "sidecar/openjev_sidecar.py"
+prewarm_from = []      # e.g. ["runs/20261005-120000.000"]
+prewarm_top = 50
+# Decision head trained on OpenJev latents (sidecar/train_head.py); "" = zero-shot OpenJev.
+head = "models/head-0.8b"
+# Chosen by `ssbot advisor-bench` (Consequence/1 scored best on 0.8B and 4B). The head was
+# trained with this wording; retrain it if you change the wording.
+wording = { style = "consequence", template = 1 }
+
+[recorder]
+frame_sample_every = 3
+keep_pre_crash_ms = 2000
+runs_dir = "runs"

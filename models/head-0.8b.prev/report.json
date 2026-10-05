@@ -1,0 +1,66 @@
+{
+  "model": "0.8b",
+  "train_situations": 6000,
+  "val_acc": 0.9166666666666666,
+  "train": {
+    "zero_shot": [
+      0.36583333333333334,
+      2195,
+      6000
+    ],
+    "trained_head": [
+      0.9635,
+      5781,
+      6000
+    ],
+    "head_misses": []
+  },
+  "test_bench": {
+    "zero_shot": [
+      0.5185185185185185,
+      14,
+      27
+    ],
+    "trained_head": [
+      1.0,
+      27,
+      27
+    ],
+    "head_misses": []
+  },
+  "test_real": {
+    "zero_shot": [
+      0.6136363636363636,
+      27,
+      44
+    ],
+    "trained_head": [
+      0.8863636363636364,
+      39,
+      44
+    ],
+    "head_misses": [
+      "frame 894: picked left, want ['right']",
+      "frame 4311: picked right, want ['left']",
+      "frame 4857: picked stay, want ['left']",
+      "frame 8565: picked right, want ['stay']",
+      "frame 10344: picked left, want ['stay']"
+    ]
+  },
+  "baseline": {
+    "test_bench": {
+      "trained_head": [
+        1.0,
+        27,
+        27
+      ]
+    },
+    "test_real": {
+      "trained_head": [
+        0.8863636363636364,
+        39,
+        44
+      ]
+    }
+  }
+}

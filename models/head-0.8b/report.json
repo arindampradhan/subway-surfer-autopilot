@@ -1,0 +1,69 @@
+{
+  "model": "0.8b",
+  "train_situations": 6000,
+  "val_acc": 0.8866666666666667,
+  "train": {
+    "zero_shot": [
+      0.35933333333333334,
+      2156,
+      6000
+    ],
+    "trained_head": [
+      0.9376666666666666,
+      5626,
+      6000
+    ],
+    "head_misses": []
+  },
+  "test_bench": {
+    "zero_shot": [
+      0.5185185185185185,
+      14,
+      27
+    ],
+    "trained_head": [
+      0.9259259259259259,
+      25,
+      27
+    ],
+    "head_misses": [
+      "barrier at mid, left free: picked stay, want ['left', 'roll']",
+      "barrier at mid, left free (mirrored): picked stay, want ['right', 'roll']"
+    ]
+  },
+  "test_real": {
+    "zero_shot": [
+      0.6136363636363636,
+      27,
+      44
+    ],
+    "trained_head": [
+      0.8863636363636364,
+      39,
+      44
+    ],
+    "head_misses": [
+      "frame 894: picked stay, want ['right']",
+      "frame 4857: picked stay, want ['left']",
+      "frame 8565: picked left, want ['stay']",
+      "frame 11451: picked stay, want ['right']",
+      "frame 11844: picked right, want ['left']"
+    ]
+  },
+  "baseline": {
+    "test_bench": {
+      "trained_head": [
+        1.0,
+        27,
+        27
+      ]
+    },
+    "test_real": {
+      "trained_head": [
+        0.8636363636363636,
+        38,
+        44
+      ]
+    }
+  }
+}

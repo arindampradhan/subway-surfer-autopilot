@@ -1,0 +1,46 @@
+{
+  "model": "0.8b",
+  "train_situations": 2000,
+  "val_acc": 0.9,
+  "train": {
+    "zero_shot": [
+      0.373,
+      746,
+      2000
+    ],
+    "trained_head": [
+      0.935,
+      1870,
+      2000
+    ],
+    "head_misses": []
+  },
+  "test_bench": {
+    "zero_shot": [
+      0.5185185185185185,
+      14,
+      27
+    ],
+    "trained_head": [
+      0.9629629629629629,
+      26,
+      27
+    ],
+    "head_misses": [
+      "barrier at mid, left free (mirrored): picked stay, want ['right', 'roll']"
+    ]
+  },
+  "test_real": {
+    "zero_shot": [
+      0.4444444444444444,
+      4,
+      9
+    ],
+    "trained_head": [
+      1.0,
+      9,
+      9
+    ],
+    "head_misses": []
+  }
+}

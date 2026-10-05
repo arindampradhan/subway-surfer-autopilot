@@ -1,0 +1,14 @@
+{
+  "_source": "recordings/session1.mov via `ssbot frames` (10 fps, 640 px). States checked by eye against the contact sheet.",
+  "000003.jpg": "-",
+  "000008.jpg": "NewHighScore",
+  "000014.jpg": "NewHighScore",
+  "000017.jpg": "ScoreScreen",
+  "000025.jpg": "ScoreScreen",
+  "000045.jpg": "AdBreak",
+  "000080.jpg": "AdBreak",
+  "000098.jpg": "Ad",
+  "000110.jpg": "Ad",
+  "000118.jpg": "-",
+  "_note": "'-' = page layout (not the calibrated fullscreen layout): no marker may match, so the bot never clicks there."
+}

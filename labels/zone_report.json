@@ -1,0 +1,44 @@
+{
+  "frames": 96,
+  "zones": 729,
+  "folds": 10,
+  "accuracy": 0.8614540466392319,
+  "near": 0.8713692946058091,
+  "per_class": {
+    "Free": [
+      414,
+      461
+    ],
+    "LowBarrier": [
+      4,
+      8
+    ],
+    "TrainBody": [
+      210,
+      260
+    ]
+  },
+  "facts_exact": [
+    31,
+    85
+  ],
+  "same_move": [
+    72,
+    85
+  ],
+  "facts_misses": [
+    "frame 10008571: move Stay instead of Jump",
+    "frame 20000001: move Hoverboard instead of Stay",
+    "frame 9000: move Left instead of Stay",
+    "frame 6975: move Left instead of Stay",
+    "frame 20000004: move Hoverboard instead of Stay",
+    "frame 11250: move Jump instead of Left",
+    "frame 20000005: move Hoverboard instead of Stay",
+    "frame 1404: move Hoverboard instead of Jump",
+    "frame 11451: move Stay instead of Right",
+    "frame 7782: move Hoverboard instead of Stay",
+    "frame 10009918: move Hoverboard instead of Stay",
+    "frame 2616: move Stay instead of Right",
+    "frame 10009552: move Stay instead of Hoverboard"
+  ]
+}

@@ -1,0 +1,323 @@
+note = "zones from live frames 2026-10-05 (vanishing point 0.455,0.24); markers pending"
+player_baseline = 0.47
+player_height = 0.67
+canvas_center = [
+    0.5,
+    0.5,
+]
+zone_model = "zone_model.json"
+
+[[lanes]]
+near = [
+    [
+    0.314,
+    0.56,
+],
+    [
+    0.4112,
+    0.56,
+],
+    [
+    0.3961,
+    0.67,
+],
+    [
+    0.2656,
+    0.67,
+],
+]
+mid = [
+    [
+    0.3537,
+    0.47,
+],
+    [
+    0.4235,
+    0.47,
+],
+    [
+    0.4112,
+    0.56,
+],
+    [
+    0.314,
+    0.56,
+],
+]
+far = [
+    [
+    0.3889,
+    0.39,
+],
+    [
+    0.4345,
+    0.39,
+],
+    [
+    0.4235,
+    0.47,
+],
+    [
+    0.3537,
+    0.47,
+],
+]
+
+[[lanes]]
+near = [
+    [
+    0.4244,
+    0.56,
+],
+    [
+    0.5216,
+    0.56,
+],
+    [
+    0.5445,
+    0.67,
+],
+    [
+    0.4139,
+    0.67,
+],
+]
+mid = [
+    [
+    0.4331,
+    0.47,
+],
+    [
+    0.5028,
+    0.47,
+],
+    [
+    0.5216,
+    0.56,
+],
+    [
+    0.4244,
+    0.56,
+],
+]
+far = [
+    [
+    0.4407,
+    0.39,
+],
+    [
+    0.4862,
+    0.39,
+],
+    [
+    0.5028,
+    0.47,
+],
+    [
+    0.4331,
+    0.47,
+],
+]
+
+[[lanes]]
+near = [
+    [
+    0.5348,
+    0.56,
+],
+    [
+    0.6321,
+    0.56,
+],
+    [
+    0.6929,
+    0.67,
+],
+    [
+    0.5623,
+    0.67,
+],
+]
+mid = [
+    [
+    0.5124,
+    0.47,
+],
+    [
+    0.5822,
+    0.47,
+],
+    [
+    0.6321,
+    0.56,
+],
+    [
+    0.5348,
+    0.56,
+],
+]
+far = [
+    [
+    0.4924,
+    0.39,
+],
+    [
+    0.538,
+    0.39,
+],
+    [
+    0.5822,
+    0.47,
+],
+    [
+    0.5124,
+    0.47,
+],
+]
+
+[player_strip]
+x = 0.15
+y = 0.62
+w = 0.7
+h = 0.3
+
+[[markers]]
+state = "Paused"
+reference = "calibration/HoverboardShop.jpg"
+max_diff = 25.0
+click = [
+    0.354,
+    0.239,
+]
+
+[markers.rect]
+x = 0.4
+y = 0.35
+w = 0.21
+h = 0.15
+
+[[markers]]
+state = "Loading"
+reference = "calibration/Loading.jpg"
+max_diff = 20.0
+
+[markers.rect]
+x = 0.32
+y = 0.32
+w = 0.36
+h = 0.36
+
+[[markers]]
+state = "ScoreScreen"
+reference = "calibration/ScoreScreen_bot.jpg"
+max_diff = 25.0
+click = [
+    0.58,
+    0.915,
+]
+
+[markers.rect]
+x = 0.52
+y = 0.88
+w = 0.12
+h = 0.07
+
+[[markers]]
+state = "Running"
+reference = "calibration/Running.jpg"
+max_diff = 10.0
+
+[markers.rect]
+x = 0.012
+y = 0.085
+w = 0.04
+h = 0.07
+
+[[markers]]
+state = "Menu"
+reference = "calibration/Menu.jpg"
+max_diff = 25.0
+click = [
+    0.5,
+    0.5,
+]
+
+[markers.rect]
+x = 0.8
+y = 0.07
+w = 0.19
+h = 0.1
+
+[[markers]]
+state = "NewHighScore"
+reference = "calibration/NewHighScore.jpg"
+max_diff = 25.0
+
+[markers.rect]
+x = 0.36
+y = 0.82
+w = 0.28
+h = 0.06
+
+[[markers]]
+state = "ScoreScreen"
+reference = "calibration/ScoreScreen.jpg"
+max_diff = 25.0
+click = [
+    0.605,
+    0.845,
+]
+
+[markers.rect]
+x = 0.55
+y = 0.8
+w = 0.11
+h = 0.09
+
+[[markers]]
+state = "NewHighScore"
+reference = "calibration/NewHighScore_bot.jpg"
+max_diff = 25.0
+
+[markers.rect]
+x = 0.38
+y = 0.895
+w = 0.24
+h = 0.055
+
+[[markers]]
+state = "RevivePrompt"
+reference = "calibration/RevivePrompt_bot.jpg"
+max_diff = 25.0
+
+[markers.rect]
+x = 0.43
+y = 0.335
+w = 0.13
+h = 0.07
+
+[thresholds]
+bg_sat_max = 0.3
+bg_val_min = 0.15
+bg_val_max = 0.8
+free_occ_max = 0.18
+train_occ_min = 0.55
+train_edge_max = 0.22
+ramp_top_ratio = 0.55
+barrier_stripe_min = 0.12
+high_barrier_occ_min = 0.45
+overhead_ratio = 1.8
+coin_frac_min = 0.03
+powerup_frac_min = 0.02
+powerup_hue = [
+    270.0,
+    330.0,
+]
+player_sat_min = 0.45
+player_frac_min = 0.04
+airborne_dy = 0.15
+roll_height_ratio = 0.65
+black_frac_adbreak = 0.85
+white_frac_ad = 0.6
+frozen_change_max = 0.004
+frozen_frames_crash = 6

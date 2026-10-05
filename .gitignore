@@ -1,0 +1,6 @@
+/target
+/runs
+/calibration/preview
+/labels/*.preview
+recordings/*.mov
+data/advisor/latents_*.npz
