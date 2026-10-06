@@ -280,19 +280,23 @@ pub enum BoxFormat {
     Yolo,
 }
 
+/// Arguments of [`import`].
+pub struct ImportOpts<'a> {
+    pub frames_dir: &'a Path,
+    pub annotations: &'a Path,
+    pub format: Option<BoxFormat>,
+    pub classes: Option<Vec<String>>,
+    pub labels_dir: &'a Path,
+    pub calibration: &'a Path,
+    pub min_overlap: f32,
+    pub force: bool,
+}
+
 /// `ssbot import`: bounding boxes from a labelling tool → `labels/<run>.jsonl`.
 /// `annotations`: a COCO JSON file, or a directory of YOLO `.txt` files.
-pub fn import(
-    frames_dir: &Path,
-    annotations: &Path,
-    format: Option<BoxFormat>,
-    classes: Option<Vec<String>>,
-    labels_dir: &Path,
-    calibration: &Path,
-    min_overlap: f32,
-    force: bool,
-) -> Result<(usize, usize)> {
+pub fn import(opts: ImportOpts) -> Result<(usize, usize)> {
     use super::boxes::{frame_label, read_coco, read_yolo, yolo_class_names};
+    let ImportOpts { frames_dir, annotations, format, classes, labels_dir, calibration, min_overlap, force } = opts;
     let format = format.unwrap_or(if annotations.is_dir() { BoxFormat::Yolo } else { BoxFormat::Coco });
     let boxes = match format {
         BoxFormat::Coco => read_coco(&std::fs::read_to_string(annotations).with_context(|| format!("reading {}", annotations.display()))?)?,
