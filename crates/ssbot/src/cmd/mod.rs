@@ -2,5 +2,7 @@
 //! (the `--help` text of their options) and a function per subcommand that runs it.
 
 pub mod advisor;
+pub mod inspect;
 pub mod label;
 pub mod play;
+pub mod train;

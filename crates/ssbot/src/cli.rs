@@ -4,9 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use ssbot_tools::frames;
-
-use crate::cmd::{advisor, label, play};
+use crate::cmd::{advisor, inspect, label, play, train};
 
 #[derive(Parser)]
 #[command(name = "ssbot", about = "Subway Surfers bot: Rust perception and reflexes, OpenJev advisor")]
@@ -38,35 +36,11 @@ pub enum Cmd {
     /// M0 spike: iframe origin, screencast fps/delay, whether keys reach the game.
     Spike(play::SpikeArgs),
     /// Capture reference frames per screen, or preview zones on frames.
-    Calibrate {
-        /// Draw zones from calibration.toml onto frames in this directory instead.
-        #[arg(long)]
-        preview: Option<PathBuf>,
-        #[arg(long, default_value = "calibration/preview")]
-        out: PathBuf,
-        /// Write the default (uncalibrated) calibration.toml and exit.
-        #[arg(long)]
-        init: bool,
-    },
+    Calibrate(inspect::CalibrateArgs),
     /// Re-run perception and policy on a recorded run, no browser.
-    Replay {
-        run: PathBuf,
-        #[arg(long)]
-        no_advisor: bool,
-    },
+    Replay(inspect::ReplayArgs),
     /// ffmpeg → canvas-cropped frames at 10 fps, 640 px wide.
-    Frames {
-        video: PathBuf,
-        #[arg(long)]
-        out: Option<PathBuf>,
-        /// Canvas crop W:H:X:Y in source pixels; detected from black borders if omitted.
-        #[arg(long)]
-        crop: Option<frames::CropPx>,
-        #[arg(long)]
-        no_crop: bool,
-        #[arg(long, default_value_t = 10)]
-        fps: u32,
-    },
+    Frames(inspect::FramesArgs),
     /// Label frames with Claude (Batches API by default).
     Label(label::LabelArgs),
     /// Static HTML gallery for spot-checks and fixes.
@@ -77,132 +51,26 @@ pub enum Cmd {
     Import(label::ImportArgs),
     /// Recording of a person playing → frames → selection → labels → zone classifier →
     /// OpenJev head. Rerunnable: each step reuses what earlier runs produced.
-    TrainByHuman {
-        /// The screen recording (.mov/.mp4) of you playing, game in fullscreen, or a run
-        /// recorded with `ssbot run --human` (its `runs/<timestamp>` directory).
-        video: PathBuf,
-        /// Dataset name (defaults to the video's file name).
-        #[arg(long)]
-        name: Option<String>,
-        /// How many frames to label.
-        #[arg(long, default_value_t = 300)]
-        max_frames: usize,
-        /// auto (Claude if credentials exist, else the manual gallery), claude or manual.
-        #[arg(long, default_value = "auto")]
-        labeller: String,
-        /// Use boxes exported from CVAT / Label Studio / makesense.ai (COCO JSON or YOLO dir).
-        #[arg(long)]
-        import: Option<PathBuf>,
-        /// Synthetic situations for OpenJev's training set.
-        #[arg(long, default_value_t = 2000)]
-        situations: usize,
-        /// Stop after the zone classifier.
-        #[arg(long)]
-        no_head: bool,
-    },
+    TrainByHuman(train::TrainByHumanArgs),
     /// Train the learned zone classifier on labels; reports cross-validated accuracy.
-    TrainZones {
-        frames_dirs: Vec<PathBuf>,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        #[arg(long, default_value = "zone_model.json")]
-        out: PathBuf,
-        #[arg(long, default_value_t = 3000)]
-        epochs: usize,
-        #[arg(long, default_value_t = 1e-3)]
-        l2: f32,
-        /// Save the model and point calibration.toml at it.
-        #[arg(long)]
-        write: bool,
-    },
+    TrainZones(train::TrainZonesArgs),
     /// Score a saved zone model on labelled frames (confusion matrix, missed hazards, false alarms).
-    EvalZones {
-        frames_dirs: Vec<PathBuf>,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        /// Model to score; defaults to the one calibration.toml points at.
-        #[arg(long)]
-        model: Option<PathBuf>,
-    },
+    EvalZones(train::EvalZonesArgs),
     /// Frames from human-recorded runs with the action pressed shortly after each, for
     /// `sidecar/il_cnn.py` (imitation learning).
-    IlData {
-        runs: Vec<PathBuf>,
-        #[arg(long, default_value = "data/il")]
-        out: PathBuf,
-        /// A key press labels the frames up to this many ms before it.
-        #[arg(long, default_value_t = 350.0)]
-        lead_ms: f64,
-        /// Keep every n-th saved frame.
-        #[arg(long, default_value_t = 2)]
-        stride: usize,
-        /// Also count the bot's own actions as labels (to test the pipeline).
-        #[arg(long)]
-        any_source: bool,
-    },
+    IlData(train::IlDataArgs),
     /// Score an imitation model on data built by `il-data` (accuracy and time per frame).
-    IlEval {
-        model: PathBuf,
-        #[arg(long, default_value = "data/il")]
-        data: PathBuf,
-    },
+    IlEval(train::IlEvalArgs),
     /// Draw what the bot's perception reports on a run's saved frames (a grid image), zones
     /// coloured by predicted class: F free, T train, R ramp, L low barrier, H high barrier.
-    See {
-        frames_dir: PathBuf,
-        #[arg(long, default_value = "see.jpg")]
-        out: PathBuf,
-        #[arg(long, default_value_t = 8)]
-        n: usize,
-        /// Start this fraction of the way into the run's running frames.
-        #[arg(long)]
-        from: Option<f64>,
-    },
+    See(inspect::SeeArgs),
     /// Copy frames where the eyes report a barrier (from run folders or a bench report) into a
     /// folder for labelling: barriers are the scarce class.
-    Mine {
-        /// Run folders, or a `runs/bench_<tag>.json`.
-        sources: Vec<PathBuf>,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long, default_value_t = 6)]
-        per_run: usize,
-        /// Least time between two picked frames of one run.
-        #[arg(long, default_value_t = 400.0)]
-        gap_ms: f64,
-    },
+    Mine(inspect::MineArgs),
     /// Write labelled zone crops (the CNN's training data) for `sidecar/zone_cnn.py`.
-    ZoneCrops {
-        frames_dirs: Vec<PathBuf>,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        #[arg(long, default_value = "data/zone_crops")]
-        out: PathBuf,
-        /// Cut crops from the frame at its recorded resolution instead of the 320×180 work image.
-        #[arg(long)]
-        native: bool,
-        /// Crop side in pixels (a multiple of 8).
-        #[arg(long, default_value_t = 32)]
-        crop: usize,
-        /// Grow each zone's box by this fraction on every side and keep the surroundings.
-        #[arg(long, default_value_t = 0.0)]
-        ctx: f32,
-        /// Stack the masked zone crop and the context crop as two views (six channels).
-        #[arg(long)]
-        dual: bool,
-        /// Context for far zones, if different from --ctx.
-        #[arg(long)]
-        ctx_far: Option<f32>,
-    },
+    ZoneCrops(train::ZoneCropsArgs),
     /// Fit classifier thresholds to Claude's labels and report held-out accuracy (M2).
-    Fit {
-        frames_dirs: Vec<PathBuf>,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        /// Save the fitted thresholds into calibration.toml.
-        #[arg(long)]
-        write: bool,
-    },
+    Fit(train::FitArgs),
     /// Score OpenJev option wordings on situations with a known best action (SPEC §9).
     AdvisorBench(advisor::AdvisorBenchArgs),
     /// Write OpenJev decision-head training and test sets (JSON lines) to a directory.
