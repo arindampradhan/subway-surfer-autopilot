@@ -3336,22 +3336,65 @@ name = "ssbot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
- "chromiumoxide",
- "chrono",
  "clap",
- "fast_image_resize",
- "futures",
  "image",
- "image_hasher",
- "reqwest",
+ "serde_json",
+ "ssbot-core",
+ "ssbot-live",
+ "ssbot-tools",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ssbot-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
  "serde",
  "serde_json",
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
+]
+
+[[package]]
+name = "ssbot-live"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "chromiumoxide",
+ "chrono",
+ "fast_image_resize",
+ "futures",
+ "image",
+ "serde",
+ "serde_json",
+ "ssbot-core",
+ "tokio",
+ "tracing",
  "xcap",
+]
+
+[[package]]
+name = "ssbot-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "clap",
+ "image",
+ "image_hasher",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "ssbot-core",
+ "ssbot-live",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
