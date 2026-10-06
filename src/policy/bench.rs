@@ -9,9 +9,9 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::Action;
-use super::advisor::{Wording, best_action, options_with};
+use super::advisor::{best_action, options_with};
 use super::reflex::Reflex;
-use crate::config::PolicyConfig;
+use crate::config::{PolicyConfig, Wording};
 use crate::facts::facts;
 use crate::perception::{Lane, LaneView, Obstacle, Observation};
 use crate::sidecar::{Reply, Request, SidecarLink};

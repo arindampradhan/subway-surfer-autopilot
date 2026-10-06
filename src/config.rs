@@ -108,6 +108,34 @@ impl Default for PolicyConfig {
     }
 }
 
+/// How effects are phrased: where the action takes you, or what it then runs into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum EffectStyle {
+    /// "moves into a lane with a train close ahead", "jumps toward the low barrier ..."
+    Position,
+    /// Adds the computed consequence: "jumps over the low barrier ...", "keeps you running
+    /// toward the train ...". Still facts from geometry, like Appendix A's "blocks X".
+    Consequence,
+}
+
+/// Option wording (SPEC §4.5, §9): an effect style and a sentence template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Wording {
+    pub style: EffectStyle,
+    /// 0: "<Action> is the best move because it <effect>." (Appendix A's best)
+    /// 1: "The best move is <action>, because it <effect>."
+    pub template: usize,
+}
+
+/// Default from `ssbot advisor-bench` on OpenJev 0.8B (2026-10-05): Consequence/1 scored
+/// 14/27 raw vs 8–10/27 for the position wordings.
+impl Default for Wording {
+    fn default() -> Self {
+        Wording { style: EffectStyle::Consequence, template: 1 }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AdvisorConfig {
@@ -122,7 +150,7 @@ pub struct AdvisorConfig {
     /// Trained decision head directory (`sidecar/train_head.py`); empty = zero-shot OpenJev.
     pub head: String,
     /// Option wording, chosen by `ssbot advisor-bench` (SPEC §9).
-    pub wording: crate::policy::advisor::Wording,
+    pub wording: Wording,
 }
 
 impl Default for AdvisorConfig {

@@ -14,10 +14,10 @@ use std::collections::{BTreeMap, HashSet};
 use serde::Serialize;
 
 use super::Action;
-use super::advisor::{Wording, options_with};
+use super::advisor::options_with;
 use super::bench::cases;
 use super::reflex::Reflex;
-use crate::config::PolicyConfig;
+use crate::config::{PolicyConfig, Wording};
 use crate::facts::facts;
 use crate::label::FrameLabel;
 use crate::perception::{GameState, Lane, LaneView, Obstacle, Observation};

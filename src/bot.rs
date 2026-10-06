@@ -72,7 +72,7 @@ async fn dispatch(game: &Game, cmd: Command, hold: Duration) -> Result<()> {
 
 /// Most frequent facts strings in earlier recordings, with their options, for the sidecar's
 /// optional pre-warm (SPEC §4.5).
-fn prewarm_items(dirs: &[String], top: usize, wording: crate::policy::advisor::Wording) -> Vec<WarmItem> {
+fn prewarm_items(dirs: &[String], top: usize, wording: crate::config::Wording) -> Vec<WarmItem> {
     let mut counts: std::collections::HashMap<String, (usize, crate::perception::Observation)> = Default::default();
     for dir in dirs {
         let Ok(events) = read_events(Path::new(dir)) else { continue };

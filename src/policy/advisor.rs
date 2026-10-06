@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::error::TryRecvError;
 
 use super::{Action, possible_actions};
+use crate::config::{EffectStyle, Wording};
 use crate::facts::{BAND_PHRASES, first_obstacle, obstacle_phrase};
 use crate::perception::{LaneView, Obstacle, Observation};
 use crate::sidecar::{Reply, Request, SidecarLink, WarmItem};
@@ -75,34 +76,6 @@ fn lane_description(view: &LaneView) -> String {
 
 fn article(noun: &str) -> String {
     if noun.starts_with(|c: char| "aeiou".contains(c)) { format!("an {noun}") } else { format!("a {noun}") }
-}
-
-/// How effects are phrased: where the action takes you, or what it then runs into.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub enum EffectStyle {
-    /// "moves into a lane with a train close ahead", "jumps toward the low barrier ..."
-    Position,
-    /// Adds the computed consequence: "jumps over the low barrier ...", "keeps you running
-    /// toward the train ...". Still facts from geometry, like Appendix A's "blocks X".
-    Consequence,
-}
-
-/// Option wording (SPEC §4.5, §9): an effect style and a sentence template.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Wording {
-    pub style: EffectStyle,
-    /// 0: "<Action> is the best move because it <effect>." (Appendix A's best)
-    /// 1: "The best move is <action>, because it <effect>."
-    pub template: usize,
-}
-
-/// Default from `ssbot advisor-bench` on OpenJev 0.8B (2026-10-05): Consequence/1 scored
-/// 14/27 raw vs 8–10/27 for the position wordings.
-impl Default for Wording {
-    fn default() -> Self {
-        Wording { style: EffectStyle::Consequence, template: 1 }
-    }
 }
 
 impl Wording {
