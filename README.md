@@ -2,7 +2,7 @@
 
 A bot that plays [Subway Surfers on Poki](https://poki.com/en/g/subway-surfers) in a real Chrome window. It reads the screen about 58 times a second, decides with a Rust reflex layer in milliseconds, and takes slower advice from a small language model (OpenJev 0.8B on MLX).
 
-![The bot's best benchmarked run: score 2230, 47 s (sped up 2x)](docs/media/best-run.gif)
+![The bot's best benchmarked run: score 2230, 47 s (sped up 2x)](docs/media/best-run.webp)
 
 *Best run of a 47-run benchmark: **score 2230, 47.0 s**, sped up 2x. Full-quality video: [best-run-original.mp4](docs/media/best-run-original.mp4) (640×358, H.264, 48.5 s). Smaller copy: [best-run.mp4](docs/media/best-run.mp4).*
 

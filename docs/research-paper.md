@@ -48,7 +48,7 @@ Our answer is a two-speed architecture (Figure 1). A Rust reflex layer acts on e
 3. **A perception pipeline built on LLM-labelled data.** It covers a strict labelling guide, measured inter-labeller agreement and hard-example mining. It lifts held-out barrier recall from 49 % to 97 %.
 4. **An honest live evaluation.** It quantifies benchmark noise and reports the negative results: imitation learning, local VLM labellers and lane-change corrections.
 
-![Figure 0. The agent's best benchmarked run, 47.0 s and score 2,230, sped up 2×.](media/best-run.gif)
+![Figure 0. The agent's best benchmarked run, 47.0 s and score 2,230, sped up 2×.](media/best-run.webp)
 
 *Figure 0. The agent's best benchmarked run (score 2,230, 47.0 s), shown at 2× speed. [Full-quality video](media/best-run-original.mp4).*
 
