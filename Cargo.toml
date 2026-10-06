@@ -1,5 +1,8 @@
 [workspace]
 members = ["crates/*"]
+# Claude Code worktrees live under .claude/worktrees/; one checked out at an older commit is its
+# own (pre-workspace) package and must not be pulled into this workspace.
+exclude = [".claude"]
 resolver = "3"
 
 [workspace.package]
