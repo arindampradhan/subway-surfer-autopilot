@@ -22,3 +22,9 @@ data/human_round2/
 labels/human_round2.jsonl
 models/head-*-candidate/
 zone_model.before-*.json
+
+# Python bytecode and training logs (local only)
+__pycache__/
+*.pyc
+/models/*.log
+/models/*.err
