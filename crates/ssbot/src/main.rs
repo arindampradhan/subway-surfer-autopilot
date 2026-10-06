@@ -1,6 +1,7 @@
 //! `ssbot` CLI (SPEC §7).
 
 mod cli;
+mod cmd;
 
 use std::path::{Path, PathBuf};
 
@@ -8,13 +9,11 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use cli::{Cli, Cmd};
+use cmd::{advisor, label, play};
 use ssbot_core::config::Config;
 use ssbot_core::perception::zones::Calibration;
-use ssbot_live::bot;
 use ssbot_tools::fit::{self, LabelledFrame};
-use ssbot_tools::label::cmd::LabelOpts;
-use ssbot_tools::label::{load_final_labels, run_name};
-use ssbot_tools::{calibrate, frames, label, replay};
+use ssbot_tools::{calibrate, frames, replay};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,97 +26,12 @@ async fn main() -> Result<()> {
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
 
     match cli.cmd {
-        Cmd::Run { model, no_advisor, capture, runs, human, il, il_mode, il_threshold } => {
-            if let Some(m) = model {
-                cfg.advisor.model = m;
-            }
-            let opts = bot::RunOpts {
-                runs,
-                advisor: !no_advisor,
-                capture: capture.unwrap_or(cfg.capture.backend),
-                human,
-                calibration: cli.calibration.clone(),
-                il: il.map(|p| (p, il_mode, il_threshold)),
-            };
-            let summaries = bot::run(&cfg, &opts).await?;
-            println!("{}", serde_json::to_string_pretty(&summaries)?);
-        }
-        Cmd::Bench { runs, tag, model, no_advisor, capture, il, il_mode, il_threshold } => {
-            if let Some(m) = model {
-                cfg.advisor.model = m;
-            }
-            let opts = bot::RunOpts {
-                runs,
-                advisor: !no_advisor,
-                capture: capture.unwrap_or(cfg.capture.backend),
-                human: false,
-                calibration: cli.calibration.clone(),
-                il: il.map(|p| (p, il_mode, il_threshold)),
-            };
-            let summaries = bot::run(&cfg, &opts).await?;
-            let report = ssbot_tools::bench::report(&tag, !no_advisor, &summaries);
-            let path = Path::new(&cfg.recorder.runs_dir).join(format!("bench_{tag}.json"));
-            std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
-            println!("{report}\nsaved {}", path.display());
-        }
-        Cmd::CrashFrames { sources, out, per_run, window_ms } => {
-            let mut dirs: Vec<PathBuf> = Vec::new();
-            for s in sources {
-                if s.extension().is_some_and(|e| e == "json") {
-                    let r: ssbot_tools::bench::BenchReport = serde_json::from_str(&std::fs::read_to_string(&s)?)?;
-                    dirs.extend(r.run_dirs.into_iter().map(PathBuf::from));
-                } else {
-                    dirs.push(s);
-                }
-            }
-            std::fs::create_dir_all(&out)?;
-            let mut copied = 0;
-            for (k, dir) in dirs.iter().enumerate() {
-                let events = ssbot_live::recorder::read_events(dir)?;
-                let ids = ssbot_live::recorder::crash_window(dir, &events, window_ms, per_run);
-                // Frame ids restart every run, so give each run its own block of ids.
-                for id in &ids {
-                    let name = format!("{}.jpg", (k as u64 + 1) * 10_000_000 + id);
-                    std::fs::copy(dir.join("frames").join(format!("{id}.jpg")), out.join(name))?;
-                }
-                copied += ids.len();
-                eprintln!("{}: {} frames", dir.display(), ids.len());
-            }
-            println!("{copied} frames from {} runs in {}", dirs.len(), out.display());
-        }
-        Cmd::BenchCompare { a, b } => {
-            for p in [a, b] {
-                let r: ssbot_tools::bench::BenchReport = serde_json::from_str(&std::fs::read_to_string(&p)?)?;
-                println!("{r}");
-            }
-        }
-        Cmd::Summarize { runs } => {
-            for dir in runs {
-                let events = ssbot_live::recorder::read_events(&dir)?;
-                let mut summary = ssbot_live::recorder::summarise(&events, None);
-                summary.score = ssbot_live::recorder::run_score(&dir, &events);
-                // The advisor's counters aren't in the events, so keep the ones already saved.
-                if let Ok(old) = std::fs::read_to_string(dir.join("summary.json"))
-                    && let Ok(old) = serde_json::from_str::<ssbot_live::recorder::Summary>(&old)
-                {
-                    summary.advisor = old.advisor;
-                    summary.advisor_freshness_rate = old.advisor_freshness_rate;
-                    summary.advisor_cache_hit_rate = old.advisor_cache_hit_rate;
-                }
-                std::fs::write(dir.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
-                println!(
-                    "{}: survived {:.1} s, crashed {}, score {}",
-                    dir.display(),
-                    summary.survival_s,
-                    summary.crashed,
-                    summary.score.map_or("?".into(), |s| s.to_string())
-                );
-            }
-        }
-        Cmd::Spike { seconds } => {
-            let report = bot::spike(&cfg, seconds).await?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
+        Cmd::Run(args) => play::run(&mut cfg, &cli.calibration, args).await?,
+        Cmd::Bench(args) => play::bench(&mut cfg, &cli.calibration, args).await?,
+        Cmd::CrashFrames(args) => play::crash_frames(args)?,
+        Cmd::BenchCompare(args) => play::bench_compare(args)?,
+        Cmd::Summarize(args) => play::summarize(args)?,
+        Cmd::Spike(args) => play::spike(&cfg, args).await?,
         Cmd::Calibrate { init: true, .. } => {
             if cli.calibration.exists() {
                 bail!("{} exists; not overwriting", cli.calibration.display());
@@ -151,43 +65,10 @@ async fn main() -> Result<()> {
             let n = frames::extract(&video, &out, crop, fps, 640)?;
             eprintln!("{n} frames in {}", out.display());
         }
-        Cmd::Label { frames_dir, model, effort, max, sync, dry_run, labels, guide, repeat_every } => {
-            let opts = LabelOpts {
-                frames_dir,
-                model,
-                effort,
-                max,
-                sync,
-                dry_run,
-                labels_dir: labels,
-                calibration: cli.calibration.clone(),
-                guide,
-                repeat_every,
-            };
-            label::cmd::label(&opts).await?;
-        }
-        Cmd::Review { frames_dir, labels, manual } => {
-            let out = label::cmd::review(&frames_dir, &labels, &cli.calibration, manual)?;
-            eprintln!("open {}", out.display());
-        }
-        Cmd::Select { frames_dir, out, max } => {
-            let n = label::cmd::select_frames(&frames_dir, &out, max, &cli.calibration)?;
-            eprintln!("selected {n} frames into {}", out.display());
-        }
-        Cmd::Import { frames_dir, annotations, format, classes, labels, min_overlap, force } => {
-            let (n, total) = label::cmd::import(label::cmd::ImportOpts {
-                frames_dir: &frames_dir,
-                annotations: &annotations,
-                format,
-                classes,
-                labels_dir: &labels,
-                calibration: &cli.calibration,
-                min_overlap,
-                force,
-            })?;
-            eprintln!("imported {n} labelled frames (of {total} in {}) into {}", frames_dir.display(), labels.join(format!("{}.jsonl", run_name(&frames_dir))).display());
-            eprintln!("check them with `ssbot review {} --manual`, then `ssbot fit`", frames_dir.display());
-        }
+        Cmd::Label(args) => label::label(&cli.calibration, args).await?,
+        Cmd::Review(args) => label::review(&cli.calibration, args)?,
+        Cmd::Select(args) => label::select(&cli.calibration, args)?,
+        Cmd::Import(args) => label::import(&cli.calibration, args)?,
         Cmd::IlData { runs, out, lead_ms, stride, any_source } => {
             let opts = ssbot_tools::il_data::IlOpts { lead_ms, stride, size: (128, 72), human_only: !any_source };
             let (n, counts) = ssbot_tools::il_data::build(&runs, &out, &opts)?;
@@ -323,41 +204,9 @@ async fn main() -> Result<()> {
                 eprintln!("saved thresholds to {}", cli.calibration.display());
             }
         }
-        Cmd::AdvisorBench { model } => {
-            if let Some(m) = model {
-                cfg.advisor.model = m;
-            }
-            let (sidecar, mut link) = ssbot_live::sidecar::Sidecar::spawn(&cfg.advisor).await?;
-            eprintln!("{} · {} cases per wording", sidecar.model, ssbot_tools::advisor_bench::cases().len());
-            let scores = ssbot_tools::advisor_bench::run(&mut link, &ssbot_core::config::Wording::ALL).await?;
-            println!("{}", serde_json::to_string_pretty(&scores)?);
-            drop(link);
-            sidecar.shutdown().await;
-        }
-        Cmd::AdvisorData { out, n, seed, frames, labels } => {
-            let mut labelled = Vec::new();
-            for (d, dir) in frames.iter().enumerate() {
-                for (id, l) in load_final_labels(&labels, &run_name(dir))? {
-                    labelled.push((d as u64 * 10_000_000 + id, l));
-                }
-            }
-            labelled.sort_by_key(|(id, _)| *id);
-            let ds = ssbot_tools::advisor_data::build(n, seed, cfg.advisor.wording, &labelled);
-            std::fs::create_dir_all(&out)?;
-            for (name, recs) in [("train", &ds.train), ("test_bench", &ds.test_bench), ("test_real", &ds.test_real), ("test_offscreen", &ds.test_offscreen)] {
-                let text: String = recs.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
-                std::fs::write(out.join(format!("{name}.jsonl")), text)?;
-                eprintln!("{name}: {} records", recs.len());
-            }
-        }
-        Cmd::LabelDump { frames_dir, labels } => {
-            let run = run_name(&frames_dir);
-            let mut all: Vec<_> = load_final_labels(&labels, &run)?.into_iter().collect();
-            all.sort_by_key(|(id, _)| *id);
-            for (id, l) in all {
-                println!("{}", serde_json::json!({"run": run, "frame_id": id, "label": l}));
-            }
-        }
+        Cmd::AdvisorBench(args) => advisor::advisor_bench(&mut cfg, args).await?,
+        Cmd::AdvisorData(args) => advisor::advisor_data(&cfg, args)?,
+        Cmd::LabelDump(args) => label::label_dump(args)?,
     }
     Ok(())
 }

@@ -4,8 +4,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use ssbot_core::config::CaptureBackend;
-use ssbot_tools::{frames, label};
+use ssbot_tools::frames;
+
+use crate::cmd::{advisor, label, play};
 
 #[derive(Parser)]
 #[command(name = "ssbot", about = "Subway Surfers bot: Rust perception and reflexes, OpenJev advisor")]
@@ -23,75 +24,19 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Play (or, with --human, record a human playing).
-    Run {
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long)]
-        no_advisor: bool,
-        #[arg(long, value_enum)]
-        capture: Option<CaptureBackend>,
-        #[arg(long, default_value_t = 1)]
-        runs: usize,
-        /// Don't send any input; record while a human plays (M1).
-        #[arg(long)]
-        human: bool,
-        /// Drive with an imitation model trained by `sidecar/il_cnn.py`.
-        #[arg(long)]
-        il: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = ssbot_core::policy::arbiter::IlMode::Guarded)]
-        il_mode: ssbot_core::policy::arbiter::IlMode,
-        /// Least probability for the model's action to be used.
-        #[arg(long, default_value_t = 0.5)]
-        il_threshold: f32,
-    },
+    Run(play::RunArgs),
     /// Play N runs and print median survival and score, to compare two configurations. Saves
     /// `runs/bench_<tag>.json`; compare two with `ssbot bench-compare a.json b.json`.
-    Bench {
-        #[arg(long, default_value_t = 20)]
-        runs: usize,
-        /// Name for this configuration (used in the output file name).
-        #[arg(long, default_value = "bench")]
-        tag: String,
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long)]
-        no_advisor: bool,
-        #[arg(long, value_enum)]
-        capture: Option<CaptureBackend>,
-        /// Drive with an imitation model (see `run --il`).
-        #[arg(long)]
-        il: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = ssbot_core::policy::arbiter::IlMode::Guarded)]
-        il_mode: ssbot_core::policy::arbiter::IlMode,
-        #[arg(long, default_value_t = 0.5)]
-        il_threshold: f32,
-    },
+    Bench(play::BenchArgs),
     /// Copy frames from just before each run ended (from run folders, or a saved bench report)
     /// into one frames folder, ready for `ssbot label` / manual labelling.
-    CrashFrames {
-        /// Run folders, or a `runs/bench_<tag>.json`.
-        sources: Vec<PathBuf>,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long, default_value_t = 8)]
-        per_run: usize,
-        #[arg(long, default_value_t = 2000.0)]
-        window_ms: f64,
-    },
+    CrashFrames(play::CrashFramesArgs),
     /// Print two saved bench reports side by side.
-    BenchCompare {
-        a: PathBuf,
-        b: PathBuf,
-    },
+    BenchCompare(play::BenchCompareArgs),
     /// Recompute `summary.json` (crash, survival, HUD score) for recorded runs.
-    Summarize {
-        runs: Vec<PathBuf>,
-    },
+    Summarize(play::SummarizeArgs),
     /// M0 spike: iframe origin, screencast fps/delay, whether keys reach the game.
-    Spike {
-        #[arg(long, default_value_t = 10)]
-        seconds: u64,
-    },
+    Spike(play::SpikeArgs),
     /// Capture reference frames per screen, or preview zones on frames.
     Calibrate {
         /// Draw zones from calibration.toml onto frames in this directory instead.
@@ -123,63 +68,13 @@ pub enum Cmd {
         fps: u32,
     },
     /// Label frames with Claude (Batches API by default).
-    Label {
-        frames_dir: PathBuf,
-        #[arg(long, default_value = "claude-opus-5-5")]
-        model: String,
-        #[arg(long, default_value = "low")]
-        effort: String,
-        #[arg(long, default_value_t = 600)]
-        max: usize,
-        /// Send through POST /v1/messages instead of a batch (quick checks).
-        #[arg(long)]
-        sync: bool,
-        /// Select frames, write overlays and estimate cost without calling the API.
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        #[arg(long, default_value = "prompts/label_guide.md")]
-        guide: PathBuf,
-        /// Label every n-th frame twice (10% by default).
-        #[arg(long, default_value_t = 10)]
-        repeat_every: usize,
-    },
+    Label(label::LabelArgs),
     /// Static HTML gallery for spot-checks and fixes.
-    Review {
-        frames_dir: PathBuf,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        /// Label by hand from scratch (no Claude labels needed).
-        #[arg(long)]
-        manual: bool,
-    },
+    Review(label::ReviewArgs),
     /// Copy a varied subset of frames (no near-duplicates) into a new directory for labelling.
-    Select {
-        frames_dir: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long, default_value_t = 300)]
-        max: usize,
-    },
+    Select(label::SelectArgs),
     /// Import bounding boxes from CVAT / Label Studio / makesense.ai / Roboflow as zone labels.
-    Import {
-        frames_dir: PathBuf,
-        /// COCO JSON file, or a directory of YOLO .txt files.
-        annotations: PathBuf,
-        #[arg(long, value_enum)]
-        format: Option<label::cmd::BoxFormat>,
-        /// YOLO class names in id order, if there's no classes.txt / data.yaml.
-        #[arg(long, value_delimiter = ',')]
-        classes: Option<Vec<String>>,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-        /// Fraction of a zone a box must cover to label it (less, down to 5%, marks it unsure).
-        #[arg(long, default_value_t = 0.4)]
-        min_overlap: f32,
-        #[arg(long)]
-        force: bool,
-    },
+    Import(label::ImportArgs),
     /// Recording of a person playing → frames → selection → labels → zone classifier →
     /// OpenJev head. Rerunnable: each step reuses what earlier runs produced.
     TrainByHuman {
@@ -309,28 +204,9 @@ pub enum Cmd {
         write: bool,
     },
     /// Score OpenJev option wordings on situations with a known best action (SPEC §9).
-    AdvisorBench {
-        #[arg(long)]
-        model: Option<String>,
-    },
+    AdvisorBench(advisor::AdvisorBenchArgs),
     /// Write OpenJev decision-head training and test sets (JSON lines) to a directory.
-    AdvisorData {
-        #[arg(long, default_value = "data/advisor")]
-        out: PathBuf,
-        #[arg(long, default_value_t = 2000)]
-        n: usize,
-        #[arg(long, default_value_t = 1)]
-        seed: u64,
-        /// Labelled frame directories whose running frames become the real test set.
-        #[arg(long)]
-        frames: Vec<PathBuf>,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-    },
+    AdvisorData(advisor::AdvisorDataArgs),
     /// Print final labels (Claude + human fixes) as JSON lines.
-    LabelDump {
-        frames_dir: PathBuf,
-        #[arg(long, default_value = "labels")]
-        labels: PathBuf,
-    },
+    LabelDump(label::LabelDumpArgs),
 }
