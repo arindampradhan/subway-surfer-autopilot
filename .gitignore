@@ -21,7 +21,10 @@ data/zc_*/
 data/human_round2/
 labels/human_round2.jsonl
 models/head-*-candidate/
-zone_model.before-*.json
+
+# old zone models: archived under models/archive/, only the live zone_model.json is tracked
+/zone_model.*.json
+/models/archive/
 
 # Python bytecode and training logs (local only)
 __pycache__/
