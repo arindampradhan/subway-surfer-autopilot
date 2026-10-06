@@ -358,7 +358,6 @@ subway_surfers_bot/
     src/sidecar.rs                # sidecar protocol: WarmItem, Request, Reply, SidecarLink
     src/perception/{mod,zones,classify,state,model,cnn}.rs
     src/policy/{mod,reflex,arbiter,advisor}.rs
-    tests/perception.rs           # + tests/fixtures/session1/ (labelled frames)
     examples/perceive.rs
   crates/ssbot-live/              # the realtime loop's I/O: browser, capture, process, recorder
     src/lib.rs
@@ -373,6 +372,7 @@ subway_surfers_bot/
     src/train.rs  src/bench.rs  src/replay.rs  src/see.rs  src/calibrate.rs  src/frames.rs
     src/il_data.rs                # IL dataset build: IlOpts, build
     src/fit.rs  src/advisor_bench.rs  src/advisor_data.rs
+    tests/perception.rs           # + tests/fixtures/session1/ (labelled frames)
     tests/replay.rs
   crates/ssbot/src/main.rs        # bin `ssbot` (CLI); feature `xcap = ["ssbot-live/xcap"]`
   sidecar/openjev_sidecar.py, sidecar/mlx_openjev.py
