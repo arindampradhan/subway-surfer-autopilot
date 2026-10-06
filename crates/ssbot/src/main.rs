@@ -558,7 +558,8 @@ async fn main() -> Result<()> {
             );
         }
         Cmd::ZoneCrops { frames_dirs, labels, out, native, crop, ctx, dual, ctx_far } => {
-            let n = ssbot_tools::train::dump_zone_crops(&cfg, &cli.calibration, &frames_dirs, &labels, &out, native, crop, ctx, dual, ctx_far)?;
+            let opts = ssbot_tools::train::ZoneCropsOpts { frames_dirs: &frames_dirs, labels_dir: &labels, out: &out, native, crop, ctx, dual, ctx_far };
+            let n = ssbot_tools::train::dump_zone_crops(&cfg, &cli.calibration, opts)?;
             println!("{n} zone crops in {}", out.display());
         }
         Cmd::EvalZones { frames_dirs, labels, model } => {
@@ -588,7 +589,8 @@ async fn main() -> Result<()> {
             );
         }
         Cmd::TrainZones { frames_dirs, labels, out, epochs, l2, write } => {
-            let r = ssbot_tools::train::train_zones(&cfg, &cli.calibration, &frames_dirs, &labels, &out, epochs, l2, write)?;
+            let opts = ssbot_tools::train::TrainZonesOpts { frames_dirs: &frames_dirs, labels_dir: &labels, out: &out, epochs, l2, write };
+            let r = ssbot_tools::train::train_zones(&cfg, &cli.calibration, opts)?;
             for m in &r.facts_misses {
                 eprintln!("  {m}");
             }

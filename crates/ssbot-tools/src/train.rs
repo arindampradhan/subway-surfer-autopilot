@@ -69,19 +69,21 @@ pub struct ZoneReport {
     pub facts_misses: Vec<String>,
 }
 
+/// Arguments of [`train_zones`] after the config and calibration path.
+pub struct TrainZonesOpts<'a> {
+    pub frames_dirs: &'a [PathBuf],
+    pub labels_dir: &'a Path,
+    pub out: &'a Path,
+    pub epochs: usize,
+    pub l2: f32,
+    pub write: bool,
+}
+
 /// Trains the zone classifier on every sure zone of every labelled running frame, reports
 /// cross-validated accuracy and facts correctness, and with `write` saves the model and
 /// points the calibration at it.
-pub fn train_zones(
-    cfg: &Config,
-    calib_path: &Path,
-    frames_dirs: &[PathBuf],
-    labels_dir: &Path,
-    out: &Path,
-    epochs: usize,
-    l2: f32,
-    write: bool,
-) -> Result<ZoneReport> {
+pub fn train_zones(cfg: &Config, calib_path: &Path, opts: TrainZonesOpts) -> Result<ZoneReport> {
+    let TrainZonesOpts { frames_dirs, labels_dir, out, epochs, l2, write } = opts;
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
     let mut calib = Calibration::load_or_default(calib_path);
     calib.zone_model = None;
@@ -93,10 +95,10 @@ pub fn train_zones(
     let mut vectors = BTreeMap::new();
     for f in frames.iter().filter(|f| f.label.game_state == GameState::Running) {
         let v = p.zone_vectors(&f.img);
-        for lane in 0..3 {
-            for band in 0..3 {
+        for (lane, lane_v) in v.iter().enumerate() {
+            for (band, zone_v) in lane_v.iter().enumerate() {
                 if let Some(z) = f.label.zone(lane, band).filter(|z| z.sure) {
-                    samples.push((f.id, v[lane][band].clone(), z.obstacle, band));
+                    samples.push((f.id, zone_v.clone(), z.obstacle, band));
                 }
             }
         }
@@ -131,9 +133,9 @@ pub fn train_zones(
             let Some(truth) = obs_from_label(f.id, &f.label) else { continue };
             let v = &vectors[&f.id];
             let mut seen = truth.clone();
-            for lane in 0..3 {
-                let pred = [0, 1, 2].map(|b| m.predict(&v[lane][b]).0);
-                (seen.lanes[lane].near, seen.lanes[lane].mid, seen.lanes[lane].far) = (pred[0], pred[1], pred[2]);
+            for (lane_v, seen_lane) in v.iter().zip(seen.lanes.iter_mut()) {
+                let pred = [0, 1, 2].map(|b| m.predict(&lane_v[b]).0);
+                (seen_lane.near, seen_lane.mid, seen_lane.far) = (pred[0], pred[1], pred[2]);
             }
             let same_facts = ssbot_core::facts::facts(&seen) == ssbot_core::facts::facts(&truth);
             let (ma, mb) = (reflex.evaluate(&seen).action, reflex.evaluate(&truth).action);
@@ -194,11 +196,11 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
     for f in frames.iter().filter(|f| f.label.game_state == GameState::Running) {
         let mut any = false;
         let masks = calib.lanes.map(|lane| lane.bands().map(|q| q.mask(f.img.width(), f.img.height())));
-        for lane in 0..3 {
-            for band in 0..3 {
+        for (lane, lane_masks) in masks.iter().enumerate() {
+            for (band, mask) in lane_masks.iter().enumerate() {
                 let Some(z) = f.label.zone(lane, band).filter(|z| z.sure) else { continue };
                 any = true;
-                let pred = model.predict(&f.img, &masks[lane][band], band);
+                let pred = model.predict(&f.img, mask, band);
                 r.zones += 1;
                 ok += (pred == z.obstacle) as usize;
                 *r.confusion.entry(format!("{:?}", z.obstacle)).or_default().entry(format!("{pred:?}")).or_default() += 1;
@@ -221,12 +223,25 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
     Ok(r)
 }
 
+/// Arguments of [`dump_zone_crops`] after the config and calibration path.
+pub struct ZoneCropsOpts<'a> {
+    pub frames_dirs: &'a [PathBuf],
+    pub labels_dir: &'a Path,
+    pub out: &'a Path,
+    pub native: bool,
+    pub crop: usize,
+    pub ctx: f32,
+    pub dual: bool,
+    pub ctx_far: Option<f32>,
+}
+
 /// Writes every sure zone of every labelled running frame as a CNN crop, for
 /// `sidecar/zone_cnn.py`: `crops.bin` (N × CROP × CROP × 3 bytes) and `meta.jsonl` (one line per
 /// crop: set, frame id, zone, class). The crops come from the same code the live perceiver
 /// uses, so what the CNN trains on is what it sees while playing.
-pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, native: bool, crop: usize, ctx: f32, dual: bool, ctx_far: Option<f32>) -> Result<usize> {
+pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, opts: ZoneCropsOpts) -> Result<usize> {
     use std::io::Write;
+    let ZoneCropsOpts { frames_dirs, labels_dir, out, native, crop, ctx, dual, ctx_far } = opts;
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
     let calib = Calibration::load_or_default(calib_path);
     std::fs::create_dir_all(out)?;
@@ -244,11 +259,11 @@ pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf],
             // small work image, so far barriers keep their detail.
             let img = if native { img } else { image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle) };
             let masks = calib.lanes.map(|lane| lane.bands().map(|q| q.mask(img.width(), img.height())));
-            for lane in 0..3 {
-                for band in 0..3 {
+            for (lane, lane_masks) in masks.iter().enumerate() {
+                for (band, mask) in lane_masks.iter().enumerate() {
                     let Some(z) = label.zone(lane, band).filter(|z| z.sure && z.obstacle != Obstacle::Unknown) else { continue };
                     let c = if band == 2 { ctx_far.unwrap_or(ctx) } else { ctx };
-                    bin.write_all(&ssbot_core::perception::cnn::zone_input(&img, &masks[lane][band], crop, c, dual))?;
+                    bin.write_all(&ssbot_core::perception::cnn::zone_input(&img, mask, crop, c, dual))?;
                     writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "lane": lane, "band": band, "class": format!("{:?}", z.obstacle)}))?;
                     n += 1;
                 }
@@ -423,7 +438,11 @@ pub async fn train_by_human(cfg: &Config, calib_path: &Path, opts: &HumanOpts) -
     eprintln!("labelled sets: {}", dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", "));
 
     step(4, "Train the zone classifier on all labelled frames");
-    let report = train_zones(cfg, calib_path, &dirs, labels_dir, Path::new("zone_model.json"), 3000, 1e-3, true)?;
+    let report = train_zones(
+        cfg,
+        calib_path,
+        TrainZonesOpts { frames_dirs: &dirs, labels_dir, out: Path::new("zone_model.json"), epochs: 3000, l2: 1e-3, write: true },
+    )?;
     eprintln!(
         "{} frames, {} zones: {}-fold accuracy {:.1}% (near {:.1}%); facts exact {}/{}, same move {}/{}",
         report.frames,
