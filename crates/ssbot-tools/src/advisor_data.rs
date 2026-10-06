@@ -59,7 +59,7 @@ fn random_view(rng: &mut Rng) -> LaneView {
     let dist = [(Free, 0.48), (TrainBody, 0.22), (TrainRamp, 0.06), (LowBarrier, 0.08), (HighBarrier, 0.07), (OverheadBar, 0.07), (Unknown, 0.02)];
     let near = rng.pick(&dist);
     // Trains are long: a train close ahead usually continues into the mid band.
-    let mid = if near == TrainBody && rng.next() < 0.7 { TrainBody } else if near == TrainRamp { TrainBody } else { rng.pick(&dist) };
+    let mid = if (near == TrainBody && rng.next() < 0.7) || near == TrainRamp { TrainBody } else { rng.pick(&dist) };
     let far = rng.pick(&dist);
     LaneView { near, mid, far, coins: rng.next() < 0.3, powerup: rng.next() < 0.05 }
 }

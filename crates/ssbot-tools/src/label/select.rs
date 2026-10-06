@@ -69,15 +69,15 @@ pub fn select(frames: &[FrameInfo], hashes: &[ImageHash], cap: usize, dup_bits: 
     // Near-duplicate removal against the last kept frame, in time order.
     let mut candidates = Vec::new();
     let mut last: Option<&ImageHash> = None;
-    for i in 0..frames.len() {
+    for (i, hash) in hashes.iter().enumerate().take(frames.len()) {
         if is_must(i) {
-            last = Some(&hashes[i]);
+            last = Some(hash);
             continue;
         }
-        if last.is_some_and(|h| h.dist(&hashes[i]) <= dup_bits) {
+        if last.is_some_and(|h| h.dist(hash) <= dup_bits) {
             continue;
         }
-        last = Some(&hashes[i]);
+        last = Some(hash);
         candidates.push(i);
     }
 
@@ -103,7 +103,7 @@ mod tests {
 
     fn hash_of(seed: u8) -> ImageHash {
         let img = RgbImage::from_fn(32, 32, |x, y| {
-            let v = ((x as u32 * (seed as u32 + 1) * 7 + y as u32 * 13 * (seed as u32 % 5 + 1)) % 256) as u8;
+            let v = ((x * (seed as u32 + 1) * 7 + y * 13 * (seed as u32 % 5 + 1)) % 256) as u8;
             Rgb([v, v, v])
         });
         HasherConfig::new().hash_size(8, 8).to_hasher().hash_image(&DynamicImage::ImageRgb8(img))

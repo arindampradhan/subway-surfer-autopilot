@@ -21,24 +21,25 @@ fn load(path: &Path) -> image::RgbImage {
 }
 
 fn session1_calibration() -> Calibration {
-    let mut c = Calibration::default();
-    c.markers = vec![
-        Marker {
-            state: GameState::NewHighScore,
-            rect: Rect { x: 0.36, y: 0.82, w: 0.28, h: 0.06 }, // "Press Space to continue"
-            reference: "fixtures/session1/000008.jpg".into(),
-            max_diff: 25.0,
-            click: None,
-        },
-        Marker {
-            state: GameState::ScoreScreen,
-            rect: Rect { x: 0.55, y: 0.80, w: 0.11, h: 0.09 }, // the green PLAY button
-            reference: "fixtures/session1/000017.jpg".into(),
-            max_diff: 25.0,
-            click: Some([0.605, 0.845]),
-        },
-    ];
-    c
+    Calibration {
+        markers: vec![
+            Marker {
+                state: GameState::NewHighScore,
+                rect: Rect { x: 0.36, y: 0.82, w: 0.28, h: 0.06 }, // "Press Space to continue"
+                reference: "fixtures/session1/000008.jpg".into(),
+                max_diff: 25.0,
+                click: None,
+            },
+            Marker {
+                state: GameState::ScoreScreen,
+                rect: Rect { x: 0.55, y: 0.80, w: 0.11, h: 0.09 }, // the green PLAY button
+                reference: "fixtures/session1/000017.jpg".into(),
+                max_diff: 25.0,
+                click: Some([0.605, 0.845]),
+            },
+        ],
+        ..Default::default()
+    }
 }
 
 #[test]
