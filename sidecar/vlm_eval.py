@@ -31,12 +31,17 @@ Classify each zone as exactly one of:
 - HighBarrier: a tall red/white chevron barrier with two boards
 - OverheadBar: a beam raised overhead
 
-Answer with JSON only, one key per zone: {"L-near":"Free","L-mid":"Free","L-far":"Free","C-near":"Free","C-mid":"Free","C-far":"Free","R-near":"Free","R-mid":"Free","R-far":"Free"}"""
+Answer with JSON only: one key per zone (L-near, L-mid, L-far, C-near, C-mid, C-far, R-near, R-mid, R-far), each value one of the six class names above."""
+
+# Constrains the reply to the six classes. Don't put an example answer in the prompt instead:
+# a filled-in example (it used to be all Free) gets copied by small models.
+SCHEMA = {"type": "object", "properties": {z: {"type": "string", "enum": CLASSES} for z in ZONES},
+          "required": ZONES, "additionalProperties": False}
 
 
 def ask(model, image_path, host):
     img = base64.b64encode(open(image_path, "rb").read()).decode()
-    body = json.dumps({"model": model, "prompt": PROMPT, "images": [img], "stream": False, "format": "json",
+    body = json.dumps({"model": model, "prompt": PROMPT, "images": [img], "stream": False, "format": SCHEMA,
                        "think": False, "options": {"temperature": 0, "num_predict": 200}}).encode()
     req = urllib.request.Request(f"{host}/api/generate", body, {"Content-Type": "application/json"})
     t = time.time()
