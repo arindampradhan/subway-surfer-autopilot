@@ -227,6 +227,9 @@ pub fn crash_window(dir: &Path, events: &[EventLine], window_ms: f64, count: usi
     (0..count).map(|i| ids[i * (ids.len() - 1) / (count - 1).max(1)]).collect()
 }
 
+/// One frame for the JPEG writer thread: destination path and image.
+type FrameJob = (PathBuf, Arc<RgbImage>);
+
 pub struct Recorder {
     pub dir: PathBuf,
     events: BufWriter<File>,
@@ -235,7 +238,7 @@ pub struct Recorder {
     keep_pre_crash_ms: f64,
     ring: VecDeque<(u64, f64, Arc<RgbImage>)>,
     saved: HashSet<u64>,
-    writer: Option<(mpsc::Sender<(PathBuf, Arc<RgbImage>)>, JoinHandle<()>)>,
+    writer: Option<(mpsc::Sender<FrameJob>, JoinHandle<()>)>,
     in_run: bool,
 }
 

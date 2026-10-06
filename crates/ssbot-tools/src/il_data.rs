@@ -46,7 +46,7 @@ pub fn build(run_dirs: &[PathBuf], out: &Path, opts: &IlOpts) -> Result<(usize, 
                 continue;
             }
             kept += 1;
-            if (kept - 1) % opts.stride.max(1) != 0 {
+            if !(kept - 1).is_multiple_of(opts.stride.max(1)) {
                 continue;
             }
             let label = actions.iter().find(|(t, _)| *t >= e.t && *t <= e.t + opts.lead_ms).map_or(0, |(_, c)| *c);

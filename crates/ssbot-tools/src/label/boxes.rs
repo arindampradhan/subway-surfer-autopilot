@@ -216,10 +216,8 @@ pub fn frame_label(boxes: &[BoxN], calib: &Calibration, min_overlap: f32) -> Fra
             for bx in boxes {
                 let c = coverage(&mask, w, h, bx);
                 match bx.class {
-                    BoxClass::Obstacle(o) if c >= min_overlap => {
-                        if best.is_none_or(|(bottom, _)| bx.y1 > bottom) {
-                            best = Some((bx.y1, o));
-                        }
+                    BoxClass::Obstacle(o) if c >= min_overlap && best.is_none_or(|(bottom, _)| bx.y1 > bottom) => {
+                        best = Some((bx.y1, o));
                     }
                     BoxClass::Obstacle(_) if c >= 0.05 => grazed = true,
                     BoxClass::Coin if c > 0.0 => coins = true,

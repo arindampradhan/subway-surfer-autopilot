@@ -73,7 +73,7 @@ pub fn zone_features(img: &RgbImage, prev: Option<&RgbImage>, mask: &ZoneMask, t
             bot_n += 1.0;
             bot_occ += occupied as u8 as f32;
         }
-        let red = (h < 15.0 || h > 345.0) && s > 0.5 && v > 0.4;
+        let red = !(15.0..=345.0).contains(&h) && s > 0.5 && v > 0.4;
         let white = s < 0.15 && v > 0.85;
         if red || white {
             stripe += 1.0;
