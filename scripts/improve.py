@@ -52,7 +52,8 @@ def run(*cmd: str) -> None:
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
-        raise typer.Exit(e.returncode)
+        # Killed by signal N (returncode -N): exit 128 + N as bash does, e.g. SIGKILL -> 137.
+        raise typer.Exit(e.returncode if e.returncode >= 0 else 128 - e.returncode)
     except OSError as e:
         typer.echo(f"{cmd[0]}: {e.strerror}", err=True)
         raise typer.Exit(127)
