@@ -172,13 +172,16 @@ pub struct Measured {
     pub marker_click: Option<[f32; 2]>,
 }
 
+/// Zone masks `[lane][band]` together with the frame size they were built for.
+type SizedMasks = ((u32, u32), [[ZoneMask; 3]; 3]);
+
 pub struct Perceiver {
     pub calib: Calibration,
     model: Option<cnn::Classifier>,
     templates: Vec<MarkerTemplate>,
-    masks: Option<((u32, u32), [[ZoneMask; 3]; 3])>,
+    masks: Option<SizedMasks>,
     /// Zone masks for the full-resolution frame, for models trained on native crops.
-    hires_masks: Option<((u32, u32), [[ZoneMask; 3]; 3])>,
+    hires_masks: Option<SizedMasks>,
     prev: Option<RgbImage>,
     detector: StateDetector,
     /// Last few raw zone classes, for a per-zone majority vote that stops one-frame flicker.
