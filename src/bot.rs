@@ -20,7 +20,8 @@ use crate::il::IlNet;
 use crate::policy::arbiter::{Arbiter, Chosen, Command, Source};
 use crate::policy::reflex::Reflex;
 use crate::recorder::{EventLine, Latency, Recorder, Summary, percentile, read_events};
-use crate::sidecar::{Sidecar, WarmItem};
+use crate::sidecar::WarmItem;
+use crate::sidecar_process::Sidecar;
 
 pub struct RunOpts {
     pub runs: usize,

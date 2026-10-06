@@ -17,4 +17,5 @@ pub mod recorder;
 pub mod replay;
 pub mod see;
 pub mod sidecar;
+pub mod sidecar_process;
 pub mod train;

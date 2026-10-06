@@ -8,7 +8,8 @@ use ssbot::facts::facts;
 use ssbot::perception::{Lane, LaneView, Obstacle, Observation};
 use ssbot::policy::Action;
 use ssbot::policy::advisor::{Advisor, options};
-use ssbot::sidecar::{Reply, Request, Sidecar};
+use ssbot::sidecar::{Reply, Request};
+use ssbot::sidecar_process::Sidecar;
 
 fn obs() -> Observation {
     Observation::running(

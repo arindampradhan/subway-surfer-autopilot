@@ -641,7 +641,7 @@ async fn main() -> Result<()> {
             if let Some(m) = model {
                 cfg.advisor.model = m;
             }
-            let (sidecar, mut link) = ssbot::sidecar::Sidecar::spawn(&cfg.advisor).await?;
+            let (sidecar, mut link) = ssbot::sidecar_process::Sidecar::spawn(&cfg.advisor).await?;
             eprintln!("{} · {} cases per wording", sidecar.model, ssbot::policy::bench::cases().len());
             let scores = ssbot::policy::bench::run(&mut link, &ssbot::config::Wording::ALL).await?;
             println!("{}", serde_json::to_string_pretty(&scores)?);
