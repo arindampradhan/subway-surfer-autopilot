@@ -350,7 +350,7 @@ subway_surfers_bot/
   SPEC.md
   Cargo.toml                      # virtual workspace: members = ["crates/*"], shared [workspace.dependencies]
   calibration.toml                # written by `ssbot calibrate`
-  crates/ssbot-core/              # pure: no browser, no network, no labelling deps (tokio only for sync channels)
+  crates/engine/                  # pure: no browser, no network, no labelling deps (tokio only for sync channels)
     src/lib.rs
     src/config.rs                 # owns `Wording`; imports nothing from policy
     src/facts.rs
@@ -359,14 +359,14 @@ subway_surfers_bot/
     src/perception/{mod,zones,classify,state,model,cnn}.rs
     src/policy/{mod,reflex,arbiter,advisor}.rs
     examples/perceive.rs
-  crates/ssbot-live/              # the realtime loop's I/O: browser, capture, process, recorder
+  crates/runtime/                 # the realtime loop's I/O: browser, capture, process, recorder
     src/lib.rs
     src/bot.rs  src/browser.rs  src/recorder.rs
     src/capture/{mod,screencast,native}.rs   # feature `xcap = ["dep:xcap"]`
     src/sidecar.rs                # sidecar process: `Sidecar::spawn`
     tests/sidecar.rs              # #[ignore]
     examples/keytest.rs
-  crates/ssbot-tools/             # offline tooling: labelling, training, benches, replay
+  crates/lab/                     # offline tooling: labelling, training, benches, replay
     src/lib.rs
     src/label/{mod,batch,boxes,checks,cmd,overlay,review,select}.rs   # §4.8
     src/train.rs  src/bench.rs  src/replay.rs  src/see.rs  src/calibrate.rs  src/frames.rs
@@ -374,14 +374,14 @@ subway_surfers_bot/
     src/fit.rs  src/advisor_bench.rs  src/advisor_data.rs
     tests/perception.rs           # + tests/fixtures/session1/ (labelled frames)
     tests/replay.rs
-  crates/ssbot/src/main.rs        # bin `ssbot` (CLI); feature `xcap = ["ssbot-live/xcap"]`
+  crates/cli/src/main.rs          # bin `ssbot` (CLI); feature `xcap = ["ssbot-runtime/xcap"]`
   sidecar/openjev_sidecar.py, sidecar/mlx_openjev.py
   scripts/improve.py              # Typer: the bench → label → train → verify loop (offline glue)
   labels/                         # Claude labels (jsonl) + human fixes, kept in git (small)
-  prompts/label_guide.md          # versioned labelling system prompt
+  labels/label_guide.md           # versioned labelling system prompt
 ```
-**Dependency direction:** `ssbot-core` ← `ssbot-live` ← `ssbot-tools` ← `ssbot`, enforced by the compiler.
-The per-frame path is `ssbot-core` + `ssbot-live` only.
+**Dependency direction:** `ssbot-engine` ← `ssbot-runtime` ← `ssbot-lab` ← `ssbot`, enforced by the compiler.
+The per-frame path is `ssbot-engine` + `ssbot-runtime` only.
 **Dependencies:** `chromiumoxide`, `tokio`, `image`, `fast_image_resize`, `serde`/`serde_json`, `toml`,
 `reqwest` (rustls, json) + `base64` + `image_hasher` (perceptual hashes) for labelling, `candle-nn` (optional, perception v2),
 `clap`, `anyhow`, `tracing`; optional `xcap` (backend B) and `ort` (perception v2).

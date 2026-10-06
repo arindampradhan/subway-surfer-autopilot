@@ -10,9 +10,9 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-ssbot-core = { path = "crates/ssbot-core" }
-ssbot-live = { path = "crates/ssbot-live" }
-ssbot-tools = { path = "crates/ssbot-tools" }
+ssbot-engine = { path = "crates/engine" }
+ssbot-runtime = { path = "crates/runtime" }
+ssbot-lab = { path = "crates/lab" }
 
 anyhow = "1.0.104"
 base64 = "0.23.1"
@@ -26,7 +26,7 @@ image_hasher = "3.1.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-# Features per crate: ssbot-core only needs `sync` (the sidecar channels), the rest use `full`.
+# Features per crate: ssbot-engine only needs `sync` (the sidecar channels), the rest use `full`.
 tokio = "1"
 toml = "1.1.6"
 tracing = "0.1.44"
