@@ -348,23 +348,40 @@ The user records gameplay but doesn't label it. Claude does the labelling instea
 ```
 subway_surfers_bot/
   SPEC.md
-  Cargo.toml              # bin: ssbot; edition 2024
-  calibration.toml        # written by `ssbot calibrate`
-  src/
-    main.rs               # CLI: run | calibrate | replay | label-dump
-    browser.rs            # chromiumoxide launch, navigate, focus, key events
-    capture/{mod,screencast,native}.rs
-    perception/{mod,zones,classify,state}.rs
-    facts.rs
-    policy/{mod,reflex,advisor,arbiter}.rs
-    sidecar.rs            # child process + JSON protocol (pattern from laya_tictactoe/src/main.rs)
-    recorder.rs
-    label/{mod,select,overlay,batch,checks,review}.rs   # §4.8: frame selection, zone overlay, Claude Batches client, checks, HTML review
+  Cargo.toml                      # virtual workspace: members = ["crates/*"], shared [workspace.dependencies]
+  calibration.toml                # written by `ssbot calibrate`
+  crates/ssbot-core/              # pure: no browser, no network, no labelling deps (tokio only for sync channels)
+    src/lib.rs
+    src/config.rs                 # owns `Wording`; imports nothing from policy
+    src/facts.rs
+    src/il.rs                     # IL inference: IL_ACTIONS, class_of, IlNet
+    src/sidecar.rs                # sidecar protocol: WarmItem, Request, Reply, SidecarLink
+    src/perception/{mod,zones,classify,state,model,cnn}.rs
+    src/policy/{mod,reflex,arbiter,advisor}.rs
+    examples/perceive.rs
+  crates/ssbot-live/              # the realtime loop's I/O: browser, capture, process, recorder
+    src/lib.rs
+    src/bot.rs  src/browser.rs  src/recorder.rs
+    src/capture/{mod,screencast,native}.rs   # feature `xcap = ["dep:xcap"]`
+    src/sidecar.rs                # sidecar process: `Sidecar::spawn`
+    tests/sidecar.rs              # #[ignore]
+    examples/keytest.rs
+  crates/ssbot-tools/             # offline tooling: labelling, training, benches, replay
+    src/lib.rs
+    src/label/{mod,batch,boxes,checks,cmd,overlay,review,select}.rs   # §4.8
+    src/train.rs  src/bench.rs  src/replay.rs  src/see.rs  src/calibrate.rs  src/frames.rs
+    src/il_data.rs                # IL dataset build: IlOpts, build
+    src/fit.rs  src/advisor_bench.rs  src/advisor_data.rs
+    tests/perception.rs           # + tests/fixtures/session1/ (labelled frames)
+    tests/replay.rs
+  crates/ssbot/src/main.rs        # bin `ssbot` (CLI); feature `xcap = ["ssbot-live/xcap"]`
   sidecar/openjev_sidecar.py, sidecar/mlx_openjev.py
-  labels/                 # Claude labels (jsonl) + human fixes, kept in git (small)
-  prompts/label_guide.md  # versioned labelling system prompt
-  tests/fixtures/         # labelled frames for perception tests
+  scripts/improve.py              # Typer: the bench → label → train → verify loop (offline glue)
+  labels/                         # Claude labels (jsonl) + human fixes, kept in git (small)
+  prompts/label_guide.md          # versioned labelling system prompt
 ```
+**Dependency direction:** `ssbot-core` ← `ssbot-live` ← `ssbot-tools` ← `ssbot`, enforced by the compiler.
+The per-frame path is `ssbot-core` + `ssbot-live` only.
 **Dependencies:** `chromiumoxide`, `tokio`, `image`, `fast_image_resize`, `serde`/`serde_json`, `toml`,
 `reqwest` (rustls, json) + `base64` + `image_hasher` (perceptual hashes) for labelling, `candle-nn` (optional, perception v2),
 `clap`, `anyhow`, `tracing`; optional `xcap` (backend B) and `ort` (perception v2).
