@@ -2,6 +2,7 @@
 
 pub mod classify;
 pub mod fit;
+pub mod cnn;
 pub mod model;
 pub mod state;
 pub mod zones;
@@ -174,9 +175,11 @@ pub struct Measured {
 
 pub struct Perceiver {
     pub calib: Calibration,
-    model: Option<model::ZoneModel>,
+    model: Option<cnn::Classifier>,
     templates: Vec<MarkerTemplate>,
     masks: Option<((u32, u32), [[ZoneMask; 3]; 3])>,
+    /// Zone masks for the full-resolution frame, for models trained on native crops.
+    hires_masks: Option<((u32, u32), [[ZoneMask; 3]; 3])>,
     prev: Option<RgbImage>,
     detector: StateDetector,
     /// Last few raw zone classes, for a per-zone majority vote that stops one-frame flicker.
@@ -204,7 +207,7 @@ impl Perceiver {
     /// `base`: directory marker reference paths are relative to; `work`: working frame size.
     pub fn new(calib: Calibration, base: &Path, work: (u32, u32)) -> Self {
         let templates = load_marker_templates(&calib, base, work);
-        let model = calib.zone_model.as_ref().and_then(|m| match model::ZoneModel::load(&base.join(m)) {
+        let model = calib.zone_model.as_ref().and_then(|m| match cnn::Classifier::load(&base.join(m)) {
             Ok(m) => Some(m),
             Err(err) => {
                 tracing::warn!("zone model: {err:#}; using threshold rules");
@@ -216,6 +219,7 @@ impl Perceiver {
             model,
             templates,
             masks: None,
+            hires_masks: None,
             prev: None,
             detector: StateDetector::default(),
             history: Default::default(),
@@ -241,14 +245,31 @@ impl Perceiver {
     }
 
     pub fn measure(&mut self, frame_id: u64, img: &RgbImage) -> Measured {
+        self.measure_with(frame_id, img, None)
+    }
+
+    /// `hires`: the same frame at full resolution, used by zone models trained on native crops.
+    pub fn measure_with(&mut self, frame_id: u64, img: &RgbImage, hires: Option<&RgbImage>) -> Measured {
         let th = self.calib.thresholds;
         let masks = self.masks(img.width(), img.height()).clone();
         let prev = self.prev.as_ref();
         let zones = [0, 1, 2].map(|l| [0, 1, 2].map(|b| zone_features(img, prev, &masks[l][b], &th)));
         let stats = frame_stats(img, prev);
 
+        // A model trained on full-resolution crops looks at the full-resolution frame.
+        let hires_img = hires.filter(|_| self.model.as_ref().is_some_and(|m| m.hires()));
+        if let Some(h) = hires_img {
+            let size = (h.width(), h.height());
+            if self.hires_masks.as_ref().map(|(sz, _)| *sz) != Some(size) {
+                let m = self.calib.lanes.map(|lane| lane.bands().map(|q| q.mask(size.0, size.1)));
+                self.hires_masks = Some((size, m));
+            }
+        }
         let classes = match &self.model {
-            Some(m) => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(&model::zone_vector(img, &masks[l][b])).0)),
+            Some(m) => match (hires_img, &self.hires_masks) {
+                (Some(h), Some((_, hm))) => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(h, &hm[l][b]))),
+                _ => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(img, &masks[l][b]))),
+            },
             None => zones.map(|lane| lane.map(|f| classify_zone(&f, &th))),
         };
         self.history.push_back(classes);

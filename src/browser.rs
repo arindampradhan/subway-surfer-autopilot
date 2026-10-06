@@ -95,6 +95,30 @@ const FILL_VIEWPORT_JS: &str = r#"(() => {
   return true;
 })()"#;
 
+/// Injected into every frame of every page the tab opens, including the cross-origin game iframe:
+/// records real key presses with their epoch-millisecond times. Iframes forward them to the top
+/// window, where `Game::drain_keys` collects them.
+const KEY_LOG_JS: &str = r#"(() => {
+  if (window.__ssKeyLog) return;
+  window.__ssKeyLog = true;
+  const push = (m) => { (window.__ssKeys = window.__ssKeys || []).push(m); };
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    const m = { __ss: 1, key: e.key, ts: performance.timeOrigin + e.timeStamp };
+    if (window === window.top) push(m); else { try { window.top.postMessage(m, '*'); } catch (_) {} }
+  }, true);
+  if (window === window.top) {
+    window.addEventListener('message', (ev) => { if (ev.data && ev.data.__ss) push(ev.data); });
+  }
+})()"#;
+
+/// A key a human pressed, with the epoch time in milliseconds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyPress {
+    pub key: String,
+    pub ts: f64,
+}
+
 /// Closes a bot browser left running by an earlier session that was killed (its Chrome keeps
 /// the profile locked). Only touches a process whose command line uses this bot profile.
 fn close_orphaned_browser(profile: &std::path::Path) {
@@ -193,6 +217,18 @@ impl Game {
             }
         }
         Ok(())
+    }
+
+    /// Records the human's key presses from now on (call before `open`, so the page and the
+    /// game iframe both load with the logger in place). Collect them with `drain_keys`.
+    pub async fn watch_keys(&self) -> Result<()> {
+        self.page.evaluate_on_new_document(KEY_LOG_JS).await.context("installing the key logger")?;
+        Ok(())
+    }
+
+    /// Key presses since the last call, oldest first.
+    pub async fn drain_keys(&self) -> Result<Vec<KeyPress>> {
+        self.eval("(() => { const k = window.__ssKeys || []; window.__ssKeys = []; return k; })()").await
     }
 
     fn full_canvas(&mut self) {

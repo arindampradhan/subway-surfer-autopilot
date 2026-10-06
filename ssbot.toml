@@ -16,10 +16,11 @@ work_size = [320, 180]
 
 [policy]
 emergency_ms = 250
+barrier_ms = 150
 cooldown_ms = 180
 advisor_max_age_ms = 400
 lookahead_ms = 700
-initial_speed_bands_per_s = 3.0
+initial_speed_bands_per_s = 4.5
 use_hoverboard = false # Space with 0 hoverboards opens a shop dialog that pauses the game
 
 [advisor]

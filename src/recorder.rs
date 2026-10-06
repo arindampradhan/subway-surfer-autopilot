@@ -51,6 +51,10 @@ pub struct Summary {
     pub downtime_s: f64,
     pub crashed: bool,
     pub crash_cause: Option<String>,
+    /// HUD score read from the last saved running frames (needs `tesseract`; `None` without it).
+    pub score: Option<u64>,
+    /// The run folder these numbers came from.
+    pub run_dir: Option<String>,
     pub actions: u64,
     pub actions_per_minute: f64,
     pub by_source: std::collections::BTreeMap<String, u64>,
@@ -70,6 +74,12 @@ pub fn percentile(values: &mut [f64], p: f64) -> f64 {
     values.sort_by(|a, b| a.total_cmp(b));
     let idx = ((values.len() - 1) as f64 * p).round() as usize;
     values[idx]
+}
+
+/// States that end a run. The crash detector only reads `Crashed` when the screen freezes, so
+/// the revive prompt and the score screens count as the run ending too.
+pub fn ends_run(state: GameState) -> bool {
+    matches!(state, GameState::Crashed | GameState::RevivePrompt | GameState::NewHighScore | GameState::ScoreScreen)
 }
 
 /// Crash cause from the last 2 s of events: what was in the player's lane just before.
@@ -110,9 +120,10 @@ pub fn summarise(events: &[EventLine], advisor: Option<AdvisorStats>) -> Summary
         }
     }
     s.survival_s = running_ms / 1000.0;
-    if let Some(crash) = events.iter().find(|e| e.obs.state == GameState::Crashed) {
+    let first_run = events.iter().position(|e| e.obs.state == GameState::Running);
+    if let Some(end) = first_run.and_then(|i| events[i..].iter().find(|e| ends_run(e.obs.state))) {
         s.crashed = true;
-        s.crash_cause = crash_cause(events, crash.t);
+        s.crash_cause = crash_cause(events, end.t);
     }
     for e in events {
         if let Command::Act(_) = e.chosen.command {
@@ -153,6 +164,69 @@ pub fn read_events(dir: &Path) -> Result<Vec<EventLine>> {
     Ok(out)
 }
 
+/// Reads the score off the top-right HUD with `tesseract`: the zero-padded six-digit number, with
+/// the crop starting to the right of the "x2" multiplier badge. Takes the last six digits read
+/// in case a stray character gets in.
+pub fn hud_score(frame: &Path, scratch: &Path) -> Option<u64> {
+    let img = image::open(frame).ok()?.to_rgb8();
+    let (w, h) = img.dimensions();
+    let (x, y) = ((w as f32 * 0.885) as u32, (h as f32 * 0.055) as u32);
+    let crop = image::imageops::crop_imm(&img, x, y, w - x - (w as f32 * 0.01) as u32, (h as f32 * 0.095) as u32).to_image();
+    let big = image::imageops::resize(&crop, crop.width() * 4, crop.height() * 4, image::imageops::FilterType::Lanczos3);
+    // White digits on a dark plate -> black digits on white, which tesseract reads best.
+    let bin = image::GrayImage::from_fn(big.width(), big.height(), |px, py| {
+        let p = big.get_pixel(px, py).0;
+        let lum = (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32) as u8;
+        image::Luma([if lum > 170 { 0 } else { 255 }])
+    });
+    bin.save(scratch).ok()?;
+    let out = std::process::Command::new("tesseract")
+        .arg(scratch)
+        .args(["stdout", "--psm", "7", "-c", "tessedit_char_whitelist=0123456789"])
+        .output()
+        .ok()?;
+    let digits: String = String::from_utf8_lossy(&out.stdout).chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 6).then(|| digits[digits.len() - 6..].parse().ok()).flatten()
+}
+
+/// The HUD score from the last saved running frames of a run folder. The score never goes down
+/// within a run, so the best of the last three readable frames is the final one.
+pub fn run_score(dir: &Path, events: &[EventLine]) -> Option<u64> {
+    let frames = dir.join("frames");
+    // A misread can't be higher than the run could plausibly have scored: ~40 points a second
+    // in the runs seen, so 300 a second is a very generous ceiling.
+    let running_s: f64 = events.windows(2).filter(|w| w[0].obs.state == GameState::Running).map(|w| (w[1].t - w[0].t) / 1000.0).sum();
+    let ceiling = (300.0 * running_s + 300.0) as u64;
+    events
+        .iter()
+        .rev()
+        .filter(|e| e.obs.state == GameState::Running)
+        .map(|e| frames.join(format!("{}.jpg", e.frame_id)))
+        .filter(|p| p.exists())
+        .take(3)
+        .filter_map(|p| hud_score(&p, &dir.join("score_ocr.png")))
+        .filter(|s| *s <= ceiling)
+        .max()
+}
+
+/// Saved frames from the last `window_ms` of running before a run ended, thinned to at most
+/// `count` evenly spaced ones: the moments the bot misjudged. Empty if the run didn't end.
+pub fn crash_window(dir: &Path, events: &[EventLine], window_ms: f64, count: usize) -> Vec<u64> {
+    let Some(first_run) = events.iter().position(|e| e.obs.state == GameState::Running) else { return Vec::new() };
+    let Some(end) = events[first_run..].iter().find(|e| ends_run(e.obs.state)) else { return Vec::new() };
+    let frames = dir.join("frames");
+    let ids: Vec<u64> = events
+        .iter()
+        .filter(|e| e.obs.state == GameState::Running && e.t >= end.t - window_ms && e.t < end.t)
+        .map(|e| e.frame_id)
+        .filter(|id| frames.join(format!("{id}.jpg")).exists())
+        .collect();
+    if ids.len() <= count {
+        return ids;
+    }
+    (0..count).map(|i| ids[i * (ids.len() - 1) / (count - 1).max(1)]).collect()
+}
+
 pub struct Recorder {
     pub dir: PathBuf,
     events: BufWriter<File>,
@@ -162,7 +236,7 @@ pub struct Recorder {
     ring: VecDeque<(u64, f64, Arc<RgbImage>)>,
     saved: HashSet<u64>,
     writer: Option<(mpsc::Sender<(PathBuf, Arc<RgbImage>)>, JoinHandle<()>)>,
-    was_crashed: bool,
+    in_run: bool,
 }
 
 impl Recorder {
@@ -188,7 +262,7 @@ impl Recorder {
             ring: VecDeque::new(),
             saved: HashSet::new(),
             writer: Some((tx, handle)),
-            was_crashed: false,
+            in_run: false,
         })
     }
 
@@ -209,15 +283,16 @@ impl Recorder {
         while self.ring.front().is_some_and(|(_, ft, _)| t - ft > self.keep_pre_crash_ms) {
             self.ring.pop_front();
         }
-        let crashed = ev.obs.state == GameState::Crashed;
-        if crashed && !self.was_crashed {
-            // Always keep the frames leading up to a crash.
+        if ev.obs.state == GameState::Running {
+            self.in_run = true;
+        } else if self.in_run && ends_run(ev.obs.state) {
+            // Always keep the frames leading up to the end of a run.
+            self.in_run = false;
             let ring: Vec<_> = self.ring.drain(..).collect();
             for (fid, _, img) in ring {
                 self.save_frame(fid, img);
             }
         }
-        self.was_crashed = crashed;
         serde_json::to_writer(&mut self.events, &ev)?;
         self.events.write_all(b"\n")?;
         self.lines.push(ev);
@@ -234,7 +309,9 @@ impl Recorder {
             drop(tx);
             let _ = handle.join();
         }
-        let summary = summarise(&self.lines, advisor);
+        let mut summary = summarise(&self.lines, advisor);
+        summary.score = run_score(&self.dir, &self.lines);
+        summary.run_dir = Some(self.dir.display().to_string());
         std::fs::write(self.dir.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
         Ok(summary)
     }
@@ -262,6 +339,36 @@ mod tests {
             },
             latency_ms: Latency { total_ms: 30.0 + id as f32, ..Default::default() },
         }
+    }
+
+    #[test]
+    fn revive_prompt_counts_as_a_crash() {
+        let mut evs: Vec<EventLine> = (0..40).map(|i| ev(i, i as f64 * 50.0, GameState::Running, None)).collect();
+        evs.push(ev(40, 2100.0, GameState::Unknown, None));
+        evs.push(ev(41, 2900.0, GameState::RevivePrompt, None));
+        let s = summarise(&evs, None);
+        assert!(s.crashed);
+        assert!(s.crash_cause.unwrap().starts_with("TrainBody at near in center lane"));
+        // A run that never started running isn't a crash.
+        let idle: Vec<EventLine> = (0..5).map(|i| ev(i, i as f64 * 50.0, GameState::ScoreScreen, None)).collect();
+        assert!(!summarise(&idle, None).crashed);
+    }
+
+    #[test]
+    fn crash_window_picks_frames_before_the_end() {
+        let dir = std::env::temp_dir().join(format!("ssbot_cw_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("frames")).unwrap();
+        let mut evs: Vec<EventLine> = (0..100).map(|i| ev(i, i as f64 * 50.0, GameState::Running, None)).collect();
+        evs.push(ev(100, 5000.0, GameState::RevivePrompt, None));
+        for e in &evs {
+            std::fs::write(dir.join("frames").join(format!("{}.jpg", e.frame_id)), b"x").unwrap();
+        }
+        let ids = crash_window(&dir, &evs, 2000.0, 5);
+        assert_eq!(ids.len(), 5);
+        assert!(ids.iter().all(|&i| (60..100).contains(&i)), "{ids:?}");
+        assert_eq!(*ids.last().unwrap(), 99);
+        assert!(crash_window(&dir, &evs[..50], 2000.0, 5).is_empty(), "no run end, no window");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

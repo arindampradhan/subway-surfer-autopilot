@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 use ssbot::config::{CaptureBackend, Config};
@@ -40,6 +40,57 @@ enum Cmd {
         /// Don't send any input; record while a human plays (M1).
         #[arg(long)]
         human: bool,
+        /// Drive with an imitation model trained by `sidecar/il_cnn.py`.
+        #[arg(long)]
+        il: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ssbot::policy::arbiter::IlMode::Guarded)]
+        il_mode: ssbot::policy::arbiter::IlMode,
+        /// Least probability for the model's action to be used.
+        #[arg(long, default_value_t = 0.5)]
+        il_threshold: f32,
+    },
+    /// Play N runs and print median survival and score, to compare two configurations. Saves
+    /// `runs/bench_<tag>.json`; compare two with `ssbot bench-compare a.json b.json`.
+    Bench {
+        #[arg(long, default_value_t = 20)]
+        runs: usize,
+        /// Name for this configuration (used in the output file name).
+        #[arg(long, default_value = "bench")]
+        tag: String,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        no_advisor: bool,
+        #[arg(long, value_enum)]
+        capture: Option<CaptureBackend>,
+        /// Drive with an imitation model (see `run --il`).
+        #[arg(long)]
+        il: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ssbot::policy::arbiter::IlMode::Guarded)]
+        il_mode: ssbot::policy::arbiter::IlMode,
+        #[arg(long, default_value_t = 0.5)]
+        il_threshold: f32,
+    },
+    /// Copy frames from just before each run ended (from run folders, or a saved bench report)
+    /// into one frames folder, ready for `ssbot label` / manual labelling.
+    CrashFrames {
+        /// Run folders, or a `runs/bench_<tag>.json`.
+        sources: Vec<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        per_run: usize,
+        #[arg(long, default_value_t = 2000.0)]
+        window_ms: f64,
+    },
+    /// Print two saved bench reports side by side.
+    BenchCompare {
+        a: PathBuf,
+        b: PathBuf,
+    },
+    /// Recompute `summary.json` (crash, survival, HUD score) for recorded runs.
+    Summarize {
+        runs: Vec<PathBuf>,
     },
     /// M0 spike: iframe origin, screencast fps/delay, whether keys reach the game.
     Spike {
@@ -174,6 +225,66 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
+    /// Score a saved zone model on labelled frames (confusion matrix, missed hazards, false alarms).
+    EvalZones {
+        frames_dirs: Vec<PathBuf>,
+        #[arg(long, default_value = "labels")]
+        labels: PathBuf,
+        /// Model to score; defaults to the one calibration.toml points at.
+        #[arg(long)]
+        model: Option<PathBuf>,
+    },
+    /// Frames from human-recorded runs with the action pressed shortly after each, for
+    /// `sidecar/il_cnn.py` (imitation learning).
+    IlData {
+        runs: Vec<PathBuf>,
+        #[arg(long, default_value = "data/il")]
+        out: PathBuf,
+        /// A key press labels the frames up to this many ms before it.
+        #[arg(long, default_value_t = 350.0)]
+        lead_ms: f64,
+        /// Keep every n-th saved frame.
+        #[arg(long, default_value_t = 2)]
+        stride: usize,
+        /// Also count the bot's own actions as labels (to test the pipeline).
+        #[arg(long)]
+        any_source: bool,
+    },
+    /// Score an imitation model on data built by `il-data` (accuracy and time per frame).
+    IlEval {
+        model: PathBuf,
+        #[arg(long, default_value = "data/il")]
+        data: PathBuf,
+    },
+    /// Draw what the bot's perception reports on a run's saved frames (a grid image), zones
+    /// coloured by predicted class: F free, T train, R ramp, L low barrier, H high barrier.
+    See {
+        frames_dir: PathBuf,
+        #[arg(long, default_value = "see.jpg")]
+        out: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        n: usize,
+        /// Start this fraction of the way into the run's running frames.
+        #[arg(long)]
+        from: Option<f64>,
+    },
+    /// Write labelled zone crops (the CNN's training data) for `sidecar/zone_cnn.py`.
+    ZoneCrops {
+        frames_dirs: Vec<PathBuf>,
+        #[arg(long, default_value = "labels")]
+        labels: PathBuf,
+        #[arg(long, default_value = "data/zone_crops")]
+        out: PathBuf,
+        /// Cut crops from the frame at its recorded resolution instead of the 320×180 work image.
+        #[arg(long)]
+        native: bool,
+        /// Crop side in pixels (a multiple of 8).
+        #[arg(long, default_value_t = 32)]
+        crop: usize,
+        /// Grow each zone's box by this fraction on every side and keep the surroundings.
+        #[arg(long, default_value_t = 0.0)]
+        ctx: f32,
+    },
     /// Fit classifier thresholds to Claude's labels and report held-out accuracy (M2).
     Fit {
         frames_dirs: Vec<PathBuf>,
@@ -221,7 +332,7 @@ async fn main() -> Result<()> {
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
 
     match cli.cmd {
-        Cmd::Run { model, no_advisor, capture, runs, human } => {
+        Cmd::Run { model, no_advisor, capture, runs, human, il, il_mode, il_threshold } => {
             if let Some(m) = model {
                 cfg.advisor.model = m;
             }
@@ -231,9 +342,82 @@ async fn main() -> Result<()> {
                 capture: capture.unwrap_or(cfg.capture.backend),
                 human,
                 calibration: cli.calibration.clone(),
+                il: il.map(|p| (p, il_mode, il_threshold)),
             };
             let summaries = bot::run(&cfg, &opts).await?;
             println!("{}", serde_json::to_string_pretty(&summaries)?);
+        }
+        Cmd::Bench { runs, tag, model, no_advisor, capture, il, il_mode, il_threshold } => {
+            if let Some(m) = model {
+                cfg.advisor.model = m;
+            }
+            let opts = bot::RunOpts {
+                runs,
+                advisor: !no_advisor,
+                capture: capture.unwrap_or(cfg.capture.backend),
+                human: false,
+                calibration: cli.calibration.clone(),
+                il: il.map(|p| (p, il_mode, il_threshold)),
+            };
+            let summaries = bot::run(&cfg, &opts).await?;
+            let report = ssbot::bench::report(&tag, !no_advisor, &summaries);
+            let path = Path::new(&cfg.recorder.runs_dir).join(format!("bench_{tag}.json"));
+            std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
+            println!("{report}\nsaved {}", path.display());
+        }
+        Cmd::CrashFrames { sources, out, per_run, window_ms } => {
+            let mut dirs: Vec<PathBuf> = Vec::new();
+            for s in sources {
+                if s.extension().is_some_and(|e| e == "json") {
+                    let r: ssbot::bench::BenchReport = serde_json::from_str(&std::fs::read_to_string(&s)?)?;
+                    dirs.extend(r.run_dirs.into_iter().map(PathBuf::from));
+                } else {
+                    dirs.push(s);
+                }
+            }
+            std::fs::create_dir_all(&out)?;
+            let mut copied = 0;
+            for (k, dir) in dirs.iter().enumerate() {
+                let events = ssbot::recorder::read_events(dir)?;
+                let ids = ssbot::recorder::crash_window(dir, &events, window_ms, per_run);
+                // Frame ids restart every run, so give each run its own block of ids.
+                for id in &ids {
+                    let name = format!("{}.jpg", (k as u64 + 1) * 10_000_000 + id);
+                    std::fs::copy(dir.join("frames").join(format!("{id}.jpg")), out.join(name))?;
+                }
+                copied += ids.len();
+                eprintln!("{}: {} frames", dir.display(), ids.len());
+            }
+            println!("{copied} frames from {} runs in {}", dirs.len(), out.display());
+        }
+        Cmd::BenchCompare { a, b } => {
+            for p in [a, b] {
+                let r: ssbot::bench::BenchReport = serde_json::from_str(&std::fs::read_to_string(&p)?)?;
+                println!("{r}");
+            }
+        }
+        Cmd::Summarize { runs } => {
+            for dir in runs {
+                let events = ssbot::recorder::read_events(&dir)?;
+                let mut summary = ssbot::recorder::summarise(&events, None);
+                summary.score = ssbot::recorder::run_score(&dir, &events);
+                // The advisor's counters aren't in the events, so keep the ones already saved.
+                if let Ok(old) = std::fs::read_to_string(dir.join("summary.json"))
+                    && let Ok(old) = serde_json::from_str::<ssbot::recorder::Summary>(&old)
+                {
+                    summary.advisor = old.advisor;
+                    summary.advisor_freshness_rate = old.advisor_freshness_rate;
+                    summary.advisor_cache_hit_rate = old.advisor_cache_hit_rate;
+                }
+                std::fs::write(dir.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
+                println!(
+                    "{}: survived {:.1} s, crashed {}, score {}",
+                    dir.display(),
+                    summary.survival_s,
+                    summary.crashed,
+                    summary.score.map_or("?".into(), |s| s.to_string())
+                );
+            }
         }
         Cmd::Spike { seconds } => {
             let report = bot::spike(&cfg, seconds).await?;
@@ -300,6 +484,56 @@ async fn main() -> Result<()> {
                 label::cmd::import(&frames_dir, &annotations, format, classes, &labels, &cli.calibration, min_overlap, force)?;
             eprintln!("imported {n} labelled frames (of {total} in {}) into {}", frames_dir.display(), labels.join(format!("{}.jsonl", run_name(&frames_dir))).display());
             eprintln!("check them with `ssbot review {} --manual`, then `ssbot fit`", frames_dir.display());
+        }
+        Cmd::IlData { runs, out, lead_ms, stride, any_source } => {
+            let opts = ssbot::il::IlOpts { lead_ms, stride, size: (128, 72), human_only: !any_source };
+            let (n, counts) = ssbot::il::build(&runs, &out, &opts)?;
+            println!("{n} frames in {} (stay {}, left {}, right {}, jump {}, roll {})", out.display(), counts[0], counts[1], counts[2], counts[3], counts[4]);
+        }
+        Cmd::See { frames_dir, out, n, from } => {
+            let k = ssbot::see::sheet(&cfg, &cli.calibration, &frames_dir, &out, n, from)?;
+            println!("{k} frames drawn in {}", out.display());
+        }
+        Cmd::IlEval { model, data } => {
+            let net = ssbot::il::IlNet::load(&model)?;
+            let raw = std::fs::read(data.join("frames.bin"))?;
+            let labels: Vec<usize> = std::fs::read_to_string(data.join("meta.jsonl"))?
+                .lines()
+                .map(|l| serde_json::from_str::<serde_json::Value>(l).map(|v| v["label"].as_u64().unwrap_or(0) as usize))
+                .collect::<Result<_, _>>()?;
+            let (w, h) = (net.width, net.height);
+            let size = (w * h * 3) as usize;
+            let started = std::time::Instant::now();
+            let mut hits = 0;
+            for (i, label) in labels.iter().enumerate() {
+                let img = image::RgbImage::from_raw(w, h, raw[i * size..(i + 1) * size].to_vec()).context("frame size")?;
+                hits += (ssbot::il::class_of(net.best(&img).0) == Some(*label)) as usize;
+            }
+            println!(
+                "{} frames: accuracy {:.3}, {:.1} ms per frame",
+                labels.len(),
+                hits as f64 / labels.len() as f64,
+                started.elapsed().as_secs_f64() * 1000.0 / labels.len() as f64
+            );
+        }
+        Cmd::ZoneCrops { frames_dirs, labels, out, native, crop, ctx } => {
+            let n = ssbot::train::dump_zone_crops(&cfg, &cli.calibration, &frames_dirs, &labels, &out, native, crop, ctx)?;
+            println!("{n} zone crops in {}", out.display());
+        }
+        Cmd::EvalZones { frames_dirs, labels, model } => {
+            let calib = Calibration::load_or_default(&cli.calibration);
+            let base = cli.calibration.parent().unwrap_or(Path::new(".")).to_path_buf();
+            let model = match (model, calib.zone_model) {
+                (Some(m), _) => m,
+                (None, Some(m)) => base.join(m),
+                (None, None) => bail!("calibration has no zone_model; pass --model"),
+            };
+            let r = ssbot::train::eval_zones(&cfg, &cli.calibration, &model, &frames_dirs, &labels)?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+            println!(
+                "{} sure zones on {} frames: accuracy {:.3}; missed hazards {}/{}; false alarms {}/{}",
+                r.zones, r.frames, r.accuracy, r.missed_hazards.0, r.missed_hazards.1, r.false_alarms.0, r.false_alarms.1
+            );
         }
         Cmd::TrainZones { frames_dirs, labels, out, epochs, l2, write } => {
             let r = ssbot::train::train_zones(&cfg, &cli.calibration, &frames_dirs, &labels, &out, epochs, l2, write)?;

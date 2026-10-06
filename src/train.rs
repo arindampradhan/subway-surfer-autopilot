@@ -16,7 +16,7 @@ use crate::label::{labels_path, load_final_labels, run_name};
 use crate::perception::fit::LabelledFrame;
 use crate::perception::model::ZoneModel;
 use crate::perception::zones::Calibration;
-use crate::perception::{GameState, Perceiver};
+use crate::perception::{GameState, Obstacle, Perceiver};
 use crate::policy::dataset::{self, obs_from_label};
 use crate::policy::reflex::Reflex;
 
@@ -29,7 +29,8 @@ pub fn load_labelled(dirs: &[PathBuf], labels_dir: &Path, work: (u32, u32)) -> R
         for (id, path) in list_frames(dir)? {
             let Some(label) = labels.get(&id) else { continue };
             let img = image::open(&path).with_context(|| format!("opening {}", path.display()))?.to_rgb8();
-            let img = image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle);
+            // A work width of 0 means keep the frame at its recorded resolution.
+            let img = if work.0 == 0 { img } else { image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle) };
             out.push(LabelledFrame { id: d as u64 * 10_000_000 + id, img, label: label.clone() });
         }
     }
@@ -161,6 +162,91 @@ pub fn train_zones(
         calib.save(calib_path)?;
     }
     Ok(r)
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct EvalReport {
+    pub frames: usize,
+    pub zones: usize,
+    pub accuracy: f64,
+    /// truth -> predicted -> count
+    pub confusion: BTreeMap<String, BTreeMap<String, usize>>,
+    /// Zones labelled with a hazard (train body, barrier, overhead bar) that the model called free.
+    pub missed_hazards: (usize, usize),
+    /// Zones labelled free that the model called a hazard (these make the bot dodge for nothing).
+    pub false_alarms: (usize, usize),
+}
+
+/// Scores a saved zone model on labelled frames it may not have trained on. Only sure zones of
+/// running frames count.
+pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path) -> Result<EvalReport> {
+    let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
+    let calib = Calibration::load_or_default(calib_path);
+    let model = crate::perception::cnn::Classifier::load(model_path).with_context(|| format!("loading {}", model_path.display()))?;
+    // A model trained on full-resolution crops is scored on full-resolution frames.
+    let frames = load_labelled(frames_dirs, labels_dir, if model.hires() { (0, 0) } else { work })?;
+    let mut r = EvalReport::default();
+    let mut ok = 0;
+    for f in frames.iter().filter(|f| f.label.game_state == GameState::Running) {
+        let mut any = false;
+        let masks = calib.lanes.map(|lane| lane.bands().map(|q| q.mask(f.img.width(), f.img.height())));
+        for lane in 0..3 {
+            for band in 0..3 {
+                let Some(z) = f.label.zone(lane, band).filter(|z| z.sure) else { continue };
+                any = true;
+                let pred = model.predict(&f.img, &masks[lane][band]);
+                r.zones += 1;
+                ok += (pred == z.obstacle) as usize;
+                *r.confusion.entry(format!("{:?}", z.obstacle)).or_default().entry(format!("{pred:?}")).or_default() += 1;
+                if z.obstacle.is_hazard() {
+                    r.missed_hazards.1 += 1;
+                    r.missed_hazards.0 += (pred == Obstacle::Free) as usize;
+                } else if z.obstacle == Obstacle::Free {
+                    r.false_alarms.1 += 1;
+                    r.false_alarms.0 += pred.is_hazard() as usize;
+                }
+            }
+        }
+        r.frames += any as usize;
+    }
+    r.accuracy = ok as f64 / r.zones.max(1) as f64;
+    Ok(r)
+}
+
+/// Writes every sure zone of every labelled running frame as a CNN crop, for
+/// `sidecar/zone_cnn.py`: `crops.bin` (N × CROP × CROP × 3 bytes) and `meta.jsonl` (one line per
+/// crop: set, frame id, zone, class). The crops come from the same code the live perceiver
+/// uses, so what the CNN trains on is what it sees while playing.
+pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, native: bool, crop: usize, ctx: f32) -> Result<usize> {
+    use std::io::Write;
+    let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
+    let calib = Calibration::load_or_default(calib_path);
+    std::fs::create_dir_all(out)?;
+    std::fs::write(out.join("crops.json"), serde_json::json!({"crop": crop, "native": native, "ctx": ctx}).to_string())?;
+    let mut bin = std::io::BufWriter::new(std::fs::File::create(out.join("crops.bin"))?);
+    let mut meta = std::io::BufWriter::new(std::fs::File::create(out.join("meta.jsonl"))?);
+    let mut n = 0;
+    for dir in frames_dirs {
+        let set = run_name(dir);
+        let labels = load_final_labels(labels_dir, &set)?;
+        for (id, path) in list_frames(dir)? {
+            let Some(label) = labels.get(&id).filter(|l| l.game_state == GameState::Running) else { continue };
+            let img = image::open(&path).with_context(|| format!("opening {}", path.display()))?.to_rgb8();
+            // Native: crop from the frame as recorded (the live canvas, 640 wide) instead of the
+            // small work image, so far barriers keep their detail.
+            let img = if native { img } else { image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle) };
+            let masks = calib.lanes.map(|lane| lane.bands().map(|q| q.mask(img.width(), img.height())));
+            for lane in 0..3 {
+                for band in 0..3 {
+                    let Some(z) = label.zone(lane, band).filter(|z| z.sure && z.obstacle != Obstacle::Unknown) else { continue };
+                    bin.write_all(&crate::perception::cnn::zone_crop(&img, &masks[lane][band], crop, ctx))?;
+                    writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "lane": lane, "band": band, "class": format!("{:?}", z.obstacle)}))?;
+                    n += 1;
+                }
+            }
+        }
+    }
+    Ok(n)
 }
 
 pub enum Labeller {

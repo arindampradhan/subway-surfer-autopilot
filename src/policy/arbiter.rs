@@ -27,7 +27,24 @@ pub enum Source {
     Reflex,
     Advisor,
     Default,
+    /// A person pressed it (`ssbot run --human`), recorded as training data.
+    Human,
+    /// The imitation model (`ssbot run --il`).
+    Il,
 }
+
+/// How the imitation model shares control with the reflex layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum IlMode {
+    /// The model decides everything while running.
+    Pure,
+    /// The model decides, but the reflex layer's emergency dodges take over.
+    #[default]
+    Guarded,
+}
+
+/// Least time between two different keys, even in an emergency.
+const EMERGENCY_MIN_GAP: Duration = Duration::from_millis(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Chosen {
@@ -46,6 +63,10 @@ pub struct Arbiter {
     hoverboard_enabled: bool,
     /// Last lane change and when, to stop immediate reversals.
     last_lane_change: Option<(Action, Instant)>,
+    il: Option<(IlMode, f32)>,
+    il_pick: Option<(Action, f32)>,
+    /// The last key sent and when, so an emergency can cut the cooldown short with a different one.
+    last_act: Option<(Action, Instant)>,
 }
 
 impl Arbiter {
@@ -61,6 +82,9 @@ impl Arbiter {
             hoverboard_cooldown: Duration::from_secs(15),
             hoverboard_enabled: true,
             last_lane_change: None,
+            il: None,
+            il_pick: None,
+            last_act: None,
         }
     }
 
@@ -68,6 +92,17 @@ impl Arbiter {
     pub fn with_hoverboard(mut self, enabled: bool) -> Self {
         self.hoverboard_enabled = enabled;
         self
+    }
+
+    /// Let an imitation model drive: its pick (set each frame with `set_il_pick`) is used when it
+    /// is an action and at least `threshold` sure; otherwise the runner stays where it is.
+    pub fn with_il(mut self, mode: IlMode, threshold: f32) -> Self {
+        self.il = Some((mode, threshold));
+        self
+    }
+
+    pub fn set_il_pick(&mut self, pick: Option<(Action, f32)>) {
+        self.il_pick = pick;
     }
 
     /// Non-running screens: what to press, rate-limited so a slow screen isn't spammed.
@@ -101,10 +136,15 @@ impl Arbiter {
         if obs.state != GameState::Running {
             return self.flow(obs.state, marker_click, now);
         }
-        if self.blocked_until.is_some_and(|t| now < t) {
-            return Chosen { command: Command::Wait, source: Source::Cooldown };
-        }
-        let (mut action, source) = if reflex.emergency {
+        let in_cooldown = self.blocked_until.is_some_and(|t| now < t);
+        let il_pick = self.il_pick.take();
+        let (mut action, source) = if let Some((mode, threshold)) = self.il {
+            match il_pick {
+                _ if reflex.emergency && mode == IlMode::Guarded => (reflex.action, Source::Reflex),
+                Some((a, p)) if a != Action::Stay && p >= threshold => (a, Source::Il),
+                _ => (Action::Stay, Source::Il),
+            }
+        } else if reflex.emergency {
             (reflex.action, Source::Reflex)
         } else if let Some(pick) = advice.filter(|p| reflex.mask.contains(&p.action)) {
             (pick.action, Source::Advisor)
@@ -116,6 +156,15 @@ impl Arbiter {
         let recent = self.last_hoverboard.is_some_and(|t| now.duration_since(t) < self.hoverboard_cooldown);
         if action == Action::Hoverboard && (recent || !self.hoverboard_enabled) {
             action = reflex.fallback;
+        }
+        // The cooldown stops key spam, but a must-act dodge that differs from the last key (a jump
+        // then a roll, two lane changes in a row) can't wait: in logged runs every emergency that
+        // went unanswered was held up by it.
+        if in_cooldown {
+            let different_key = self.last_act.is_none_or(|(a, at)| a != action && now.duration_since(at) >= EMERGENCY_MIN_GAP);
+            if !(reflex.emergency && source == Source::Reflex && action != Action::Stay && different_key) {
+                return Chosen { command: Command::Wait, source: Source::Cooldown };
+            }
         }
         // Undoing a lane change right after making it is dithering, unless staying would crash.
         let reverses = |a: Action, b: Action| matches!((a, b), (Action::Left, Action::Right) | (Action::Right, Action::Left));
@@ -131,6 +180,7 @@ impl Arbiter {
         }
         if action != Action::Stay {
             self.blocked_until = Some(now + self.cooldown);
+            self.last_act = Some((action, now));
         }
         if action == Action::Hoverboard {
             self.last_hoverboard = Some(now);
@@ -146,6 +196,46 @@ mod tests {
 
     fn reflex(mask: &[Action], emergency: bool, action: Action) -> ReflexOut {
         ReflexOut { mask: mask.to_vec(), emergency, action, tti_ms: None, speed: 3.0, fallback: Action::Jump }
+    }
+
+    #[test]
+    fn imitation_model_drives_and_reflex_can_override() {
+        let t0 = Instant::now();
+        let calm = reflex(&[Action::Stay, Action::Jump], false, Action::Stay);
+        let mut a = Arbiter::new(180, [0.5, 0.5]).with_il(IlMode::Guarded, 0.5);
+        a.set_il_pick(Some((Action::Jump, 0.9)));
+        let c = a.decide(&running(), None, &calm, None, t0);
+        assert_eq!((c.command, c.source), (Command::Act(Action::Jump), Source::Il));
+        // Not sure enough: stay put, whatever the rule policy would do.
+        let mut a = Arbiter::new(180, [0.5, 0.5]).with_il(IlMode::Guarded, 0.5);
+        a.set_il_pick(Some((Action::Left, 0.4)));
+        let wants_left = reflex(&[Action::Stay, Action::Left], false, Action::Left);
+        assert_eq!(a.decide(&running(), None, &wants_left, None, t0).command, Command::Wait);
+        // Guarded: an emergency dodge beats the model; pure: the model keeps control.
+        let emergency = reflex(&[Action::Right], true, Action::Right);
+        let mut g = Arbiter::new(180, [0.5, 0.5]).with_il(IlMode::Guarded, 0.5);
+        g.set_il_pick(Some((Action::Jump, 0.9)));
+        assert_eq!(g.decide(&running(), None, &emergency, None, t0).command, Command::Act(Action::Right));
+        let mut p = Arbiter::new(180, [0.5, 0.5]).with_il(IlMode::Pure, 0.5);
+        p.set_il_pick(Some((Action::Jump, 0.9)));
+        assert_eq!(p.decide(&running(), None, &emergency, None, t0).command, Command::Act(Action::Jump));
+    }
+
+    #[test]
+    fn emergency_can_cut_the_cooldown_with_a_different_key() {
+        let t0 = Instant::now();
+        let mut a = Arbiter::new(180, [0.5, 0.5]);
+        let jump = reflex(&[Action::Jump], true, Action::Jump);
+        let roll = reflex(&[Action::Roll], true, Action::Roll);
+        assert_eq!(a.decide(&running(), None, &jump, None, t0).command, Command::Act(Action::Jump));
+        // Same key again, or too soon: still held back.
+        assert_eq!(a.decide(&running(), None, &jump, None, t0 + Duration::from_millis(100)).command, Command::Wait);
+        assert_eq!(a.decide(&running(), None, &roll, None, t0 + Duration::from_millis(30)).command, Command::Wait);
+        // A different key after the minimum gap goes through inside the cooldown.
+        assert_eq!(a.decide(&running(), None, &roll, None, t0 + Duration::from_millis(100)).command, Command::Act(Action::Roll));
+        // A calm move still waits out the cooldown.
+        let calm = reflex(&[Action::Left, Action::Stay], false, Action::Left);
+        assert_eq!(a.decide(&running(), None, &calm, None, t0 + Duration::from_millis(160)).command, Command::Wait);
     }
 
     #[test]

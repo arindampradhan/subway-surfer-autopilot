@@ -2,7 +2,8 @@
 //! key press, recording every frame. Also the M0 spike that answers SPEC §10 questions 1, 2, 5.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::collections::VecDeque;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -14,7 +15,9 @@ use crate::facts::facts;
 use crate::perception::zones::Calibration;
 use crate::perception::{GameState, Perceiver};
 use crate::policy::advisor::{Advisor, options_with};
-use crate::policy::arbiter::{Arbiter, Command};
+use crate::policy::Action;
+use crate::il::IlNet;
+use crate::policy::arbiter::{Arbiter, Chosen, Command, Source};
 use crate::policy::reflex::Reflex;
 use crate::recorder::{EventLine, Latency, Recorder, Summary, percentile, read_events};
 use crate::sidecar::{Sidecar, WarmItem};
@@ -26,6 +29,8 @@ pub struct RunOpts {
     /// A human plays; the bot only records (M1).
     pub human: bool,
     pub calibration: std::path::PathBuf,
+    /// Imitation model to drive with (`ssbot run --il`), and how it shares control.
+    pub il: Option<(std::path::PathBuf, crate::policy::arbiter::IlMode, f32)>,
 }
 
 struct Capture {
@@ -87,6 +92,10 @@ pub async fn run(cfg: &Config, opts: &RunOpts) -> Result<Vec<Summary>> {
     let base = opts.calibration.parent().unwrap_or(Path::new(".")).to_path_buf();
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
     let mut game = Game::launch(&cfg.browser).await?;
+    if opts.human {
+        // Log the person's key presses (with times) so the recording can teach a model what to do.
+        game.watch_keys().await?;
+    }
     game.open(&cfg.browser).await?;
     game.focus().await?;
     let canvas_center = calib.canvas_center;
@@ -110,6 +119,13 @@ pub async fn run(cfg: &Config, opts: &RunOpts) -> Result<Vec<Summary>> {
     let mut perceiver = Perceiver::new(calib, &base, work);
     let mut reflex = Reflex::new(cfg.policy.clone());
     let mut arbiter = Arbiter::new(cfg.policy.cooldown_ms, canvas_center).with_hoverboard(cfg.policy.use_hoverboard);
+    let il_net = match &opts.il {
+        Some((path, mode, threshold)) if !opts.human => {
+            arbiter = arbiter.with_il(*mode, *threshold);
+            Some(IlNet::load(path)?)
+        }
+        _ => None,
+    };
     let hold = Duration::from_millis(cfg.browser.key_hold_ms);
     let runs_dir = Path::new(&cfg.recorder.runs_dir).to_path_buf();
     let mut summaries = Vec::new();
@@ -124,7 +140,10 @@ pub async fn run(cfg: &Config, opts: &RunOpts) -> Result<Vec<Summary>> {
         tracing::info!("run {run_no}/{}: recording to {}", opts.runs, rec.dir.display());
         reflex.reset();
         let mut lanes = crate::policy::LaneTracker::default();
+        let mut motion = crate::policy::MotionTracker::default();
         let started = Instant::now();
+        let epoch0_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
+        let mut human_keys: VecDeque<(f64, Action)> = VecDeque::new();
         let mut ended = false; // saw the run end (crash or score screens)
         let mut ran = false;
         let stats_before = advisor.stats;
@@ -152,30 +171,53 @@ pub async fn run(cfg: &Config, opts: &RunOpts) -> Result<Vec<Summary>> {
                 }
             };
             let t_frame = frame.t_capture;
-            let m = perceiver.measure(frame.id, &frame.rgb);
+            let m = perceiver.measure_with(frame.id, &frame.rgb, Some(&frame.canvas));
             let perceived = Instant::now();
             let mut obs = m.obs;
+            let t = t_frame.duration_since(started).as_secs_f64() * 1000.0;
             if obs.state == GameState::Running {
                 if !ran {
                     lanes.reset(); // a run starts in the centre lane
+                    motion.reset();
                 }
                 obs.player_lane = Some(lanes.lane());
-            obs.lanes = crate::perception::to_absolute(obs.lanes, lanes.lane());
+                obs.lanes = crate::perception::to_absolute(obs.lanes, lanes.lane());
+                // The sprite-based jump/roll reading almost never fires, so use our own commands.
+                obs.airborne |= motion.airborne(t);
+                obs.rolling |= motion.rolling(t);
             }
-            let t = t_frame.duration_since(started).as_secs_f64() * 1000.0;
             reflex.update(&obs, t);
             let reflex_out = reflex.evaluate(&obs);
             let fact_text = if obs.state == GameState::Running { facts(&obs) } else { None };
             let advice = if obs.state == GameState::Running { advisor.tick(&obs, fact_text.as_deref(), Instant::now()) } else { None };
+            if let (Some(net), GameState::Running) = (&il_net, obs.state) {
+                arbiter.set_il_pick(Some(net.best(&net.prepare(&frame.canvas))));
+            }
             let mut chosen = arbiter.decide(&obs, m.marker_click, &reflex_out, advice.as_ref(), Instant::now());
             if opts.human {
-                chosen.command = Command::Wait;
+                // Record what the person pressed (in the frame it happened in) instead of acting.
+                if let Ok(keys) = game.drain_keys().await {
+                    for k in keys {
+                        let at = k.ts - epoch0_ms;
+                        if let Some(a) = Action::from_dom_key(&k.key).filter(|_| at > -1000.0) {
+                            human_keys.push_back((at, a));
+                        }
+                    }
+                }
+                chosen = match human_keys.front().copied() {
+                    Some((at, a)) if at <= t => {
+                        human_keys.pop_front();
+                        Chosen { command: Command::Act(a), source: Source::Human }
+                    }
+                    _ => Chosen { command: Command::Wait, source: Source::Flow },
+                };
             }
             let decided = Instant::now();
-            match dispatch(&game, chosen.command, hold).await {
+            match if opts.human { Ok(()) } else { dispatch(&game, chosen.command, hold).await } {
                 Ok(()) => {
                     if let Command::Act(a) = chosen.command {
                         lanes.apply(a);
+                        motion.apply(a, t, cfg.policy.jump_ms as f64, cfg.policy.roll_ms as f64);
                     }
                 }
                 Err(err) => tracing::warn!("input failed: {err:#}"),

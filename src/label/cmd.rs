@@ -130,7 +130,7 @@ pub async fn label(opts: &LabelOpts) -> Result<()> {
     if opts.dry_run {
         let dir = opts.labels_dir.join(format!("{run}.preview"));
         std::fs::create_dir_all(&dir)?;
-        for (i, _) in jobs.iter().filter(|(_, rep)| !rep).take(20) {
+        for (i, _) in jobs.iter().filter(|(_, rep)| !rep).take(opts.max) {
             std::fs::write(dir.join(format!("{}.jpg", infos[*i].id)), overlay_jpeg(&infos[*i].path, &calib)?)?;
         }
         // Rough estimate (SPEC §4.8 Cost): ~350 fresh input, ~1k cached system, ~600 output tokens.

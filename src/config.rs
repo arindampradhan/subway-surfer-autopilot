@@ -73,6 +73,13 @@ impl Default for CaptureConfig {
 #[serde(default)]
 pub struct PolicyConfig {
     pub emergency_ms: u64,
+    /// Barriers are only reacted to once they are this close in time. Jumping early lands before
+    /// the barrier and the next obstacle catches the runner (logged runs: early jumps died 26%,
+    /// near ones 13%). Trains keep the longer `emergency_ms`, since a lane change needs lead time.
+    pub barrier_ms: u64,
+    /// How long a jump and a roll last, for tracking the runner's own motion (see `MotionTracker`).
+    pub jump_ms: u64,
+    pub roll_ms: u64,
     pub cooldown_ms: u64,
     pub advisor_max_age_ms: u64,
     /// Obstacles further away in time than this don't constrain the safety mask.
@@ -89,10 +96,13 @@ impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             emergency_ms: 250,
+            barrier_ms: 150,
+            jump_ms: 600,
+            roll_ms: 600,
             cooldown_ms: 180,
             advisor_max_age_ms: 400,
             lookahead_ms: 700,
-            initial_speed_bands_per_s: 3.0,
+            initial_speed_bands_per_s: 4.5,
             use_hoverboard: false,
         }
     }

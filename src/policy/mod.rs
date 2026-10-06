@@ -24,6 +24,18 @@ pub enum Action {
 impl Action {
     pub const ALL: [Action; 6] = [Self::Stay, Self::Left, Self::Right, Self::Jump, Self::Roll, Self::Hoverboard];
 
+    /// The action a human key press stands for (arrow keys or WASD; Space is the hoverboard).
+    pub fn from_dom_key(key: &str) -> Option<Action> {
+        Some(match key {
+            "ArrowLeft" | "a" | "A" => Self::Left,
+            "ArrowRight" | "d" | "D" => Self::Right,
+            "ArrowUp" | "w" | "W" => Self::Jump,
+            "ArrowDown" | "s" | "S" => Self::Roll,
+            " " => Self::Hoverboard,
+            _ => return None,
+        })
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Stay => "stay",
@@ -128,6 +140,63 @@ impl LaneTracker {
         if let Some(l) = action.target_lane(self.lane) {
             self.lane = l;
         }
+    }
+}
+
+/// Whether the runner is mid-jump or mid-roll, inferred from the bot's own commands. The
+/// perception-based jump and roll detector almost never fires (0.8% of running frames in human
+/// play, rolls never), so without this the reflex doesn't know it is already airborne and keeps
+/// reacting to a barrier it is about to clear. A roll in the air cuts the jump short (fast fall).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MotionTracker {
+    airborne_until: f64,
+    rolling_until: f64,
+}
+
+impl MotionTracker {
+    pub fn reset(&mut self) {
+        *self = MotionTracker::default();
+    }
+    pub fn apply(&mut self, action: Action, t_ms: f64, jump_ms: f64, roll_ms: f64) {
+        match action {
+            Action::Jump => {
+                self.airborne_until = t_ms + jump_ms;
+                self.rolling_until = 0.0;
+            }
+            Action::Roll => {
+                self.rolling_until = t_ms + roll_ms;
+                self.airborne_until = self.airborne_until.min(t_ms + 120.0);
+            }
+            _ => {}
+        }
+    }
+    pub fn airborne(&self, t_ms: f64) -> bool {
+        t_ms < self.airborne_until
+    }
+    pub fn rolling(&self, t_ms: f64) -> bool {
+        t_ms < self.rolling_until
+    }
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    #[test]
+    fn jump_and_roll_windows() {
+        let mut m = MotionTracker::default();
+        assert!(!m.airborne(0.0));
+        m.apply(Action::Jump, 1000.0, 600.0, 600.0);
+        assert!(m.airborne(1300.0) && !m.airborne(1700.0));
+        // Rolling in the air ends the jump early and starts the roll.
+        m.apply(Action::Roll, 1200.0, 600.0, 600.0);
+        assert!(m.rolling(1500.0) && !m.rolling(1900.0));
+        assert!(m.airborne(1300.0) && !m.airborne(1400.0));
+        // A jump cancels a roll.
+        m.apply(Action::Jump, 2000.0, 600.0, 600.0);
+        assert!(!m.rolling(2100.0) && m.airborne(2100.0));
+        m.reset();
+        assert!(!m.airborne(2100.0));
     }
 }
 

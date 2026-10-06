@@ -10,6 +10,10 @@ use crate::perception::{GameState, Lane, LaneView, Obstacle, Observation};
 
 /// Distance from the runner to the start of each band, in band lengths.
 const BAND_DISTANCE: [f32; 3] = [0.5, 1.5, 2.5];
+/// Observations the speed median is taken over, and the range of speeds the game runs at in
+/// bands per second (measured from live runs: about 5 early, 7 later).
+const SPEED_WINDOW: usize = 9;
+const SPEED_RANGE: (f32, f32) = (3.0, 8.0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReflexOut {
@@ -30,8 +34,11 @@ fn stay() -> Action {
 
 pub struct Reflex {
     cfg: PolicyConfig,
-    /// Run speed in bands per second (EMA of observed band-to-band transitions).
+    /// Run speed in bands per second: the median of recent band-to-band transitions. Classifier
+    /// flicker makes some look far too fast (seen live: an average drifted from 3 to 13), so the
+    /// median is used and the result is kept in the range the game really runs at.
     speed: f32,
+    recent: std::collections::VecDeque<f32>,
     /// Per lane: band of the first hazard and when it was first seen there (ms).
     tracked: [Option<(usize, f64)>; 3],
 }
@@ -39,7 +46,7 @@ pub struct Reflex {
 impl Reflex {
     pub fn new(cfg: PolicyConfig) -> Self {
         let speed = cfg.initial_speed_bands_per_s;
-        Self { cfg, speed, tracked: [None; 3] }
+        Self { cfg, speed, recent: Default::default(), tracked: [None; 3] }
     }
 
     pub fn speed(&self) -> f32 {
@@ -49,6 +56,7 @@ impl Reflex {
     /// Resets the speed estimate at the start of a new run.
     pub fn reset(&mut self) {
         self.speed = self.cfg.initial_speed_bands_per_s;
+        self.recent.clear();
         self.tracked = [None; 3];
     }
 
@@ -65,8 +73,13 @@ impl Reflex {
                     let dt = (t_ms - since) / 1000.0;
                     // Ignore implausible intervals (detector flicker, dropped frames).
                     if (0.05..=3.0).contains(&dt) {
-                        let observed = 1.0 / dt as f32;
-                        self.speed = 0.7 * self.speed + 0.3 * observed;
+                        self.recent.push_back(1.0 / dt as f32);
+                        if self.recent.len() > SPEED_WINDOW {
+                            self.recent.pop_front();
+                        }
+                        let mut sorted: Vec<f32> = self.recent.iter().copied().collect();
+                        sorted.sort_by(|a, b| a.total_cmp(b));
+                        self.speed = sorted[sorted.len() / 2].clamp(SPEED_RANGE.0, SPEED_RANGE.1);
                     }
                     self.tracked[lane] = Some((b, t_ms));
                 }
@@ -96,7 +109,7 @@ impl Reflex {
             if tti > window_ms {
                 break;
             }
-            let handled_later = tti > self.cfg.emergency_ms as f32;
+            let barrier_later = tti > self.cfg.barrier_ms as f32;
             let ok = match o {
                 Obstacle::Free | Obstacle::Unknown => true,
                 Obstacle::TrainRamp => {
@@ -105,8 +118,9 @@ impl Reflex {
                 }
                 // Running up a ramp puts you on top of the train; anything else hits it.
                 Obstacle::TrainBody => on_ramp,
-                Obstacle::LowBarrier => handled_later || jumping || rolling,
-                Obstacle::HighBarrier | Obstacle::OverheadBar => handled_later || rolling,
+                // Only a jump clears a low barrier: rolling at one crashed 4 of 5 times in logged runs.
+                Obstacle::LowBarrier => barrier_later || jumping,
+                Obstacle::HighBarrier | Obstacle::OverheadBar => barrier_later || rolling,
             };
             if !ok {
                 return false;
@@ -199,7 +213,18 @@ impl Reflex {
     /// the emergency priorities breaking ties.
     pub fn least_bad(&self, obs: &Observation) -> Action {
         let Some(lane) = obs.player_lane else { return Action::Stay };
-        let candidates: Vec<Action> = possible_actions(obs).iter().collect();
+        // Never sidestep into a lane that already has a train or barrier right beside the runner
+        // (the near band): that's a side collision (a stumble, and the second one ends the run).
+        // A hazard further up the lane is only ahead and moving there still buys time. When boxed
+        // in between two trains, jumping, rolling or holding the lane is the only non-crash.
+        let blocked_side = |a: Action| {
+            matches!(a, Action::Left | Action::Right)
+                && a.target_lane(lane).is_some_and(|t| obs.lanes[t.index()].near.is_hazard())
+        };
+        let mut candidates: Vec<Action> = possible_actions(obs).iter().filter(|a| !blocked_side(*a)).collect();
+        if candidates.is_empty() {
+            candidates = possible_actions(obs).iter().collect();
+        }
         let horizon = |a: Action| -> f32 {
             let mut lo = 0.0;
             for w in [50.0, 100.0, 150.0, 200.0, 300.0, 400.0, 500.0, 700.0, 1000.0] {
@@ -269,6 +294,20 @@ mod tests {
         assert_eq!(r.evaluate(&obs).action, Action::Hoverboard);
         // Once the hoverboard is used up, the fallback is still an ordinary move.
         assert_ne!(r.evaluate(&obs).fallback, Action::Hoverboard);
+    }
+
+    #[test]
+    fn boxed_in_between_trains_never_sidesteps_into_one() {
+        let r = reflex();
+        let train = LaneView { near: Obstacle::TrainBody, mid: Obstacle::TrainBody, far: Obstacle::TrainBody, ..FREE };
+        let obs = Observation::running(1, Lane::C, lanes(train, near(Obstacle::TrainBody), train));
+        let pick = r.least_bad(&obs);
+        assert!(!matches!(pick, Action::Left | Action::Right), "{pick:?}");
+        let out = r.evaluate(&obs);
+        assert!(!matches!(out.fallback, Action::Left | Action::Right), "{:?}", out.fallback);
+        // With a free neighbour the dodge is still allowed.
+        let obs = Observation::running(1, Lane::C, lanes(train, near(Obstacle::TrainBody), FREE));
+        assert_eq!(r.evaluate(&obs).action, Action::Right);
     }
 
     #[test]
