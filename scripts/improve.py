@@ -48,15 +48,25 @@ app = typer.Typer(help=__doc__.split("\n\n")[0], add_completion=False, no_args_i
 
 
 def run(*cmd: str) -> None:
-    """Run a command with its output streamed; stop with its exit code if it fails, like `set -e`."""
+    """Run a command with its output streamed; stop with its exit code if it fails, like `set -e`.
+
+    Ctrl-C reaches the child through the terminal's process group. Like bash, wait for it and never
+    kill it: `ssbot bench` traps Ctrl-C, shuts down cleanly, writes its report and exits 0, and then
+    the next step runs. A child that dies of SIGINT stops the round with 130."""
     try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        # Killed by signal N (returncode -N): exit 128 + N as bash does, e.g. SIGKILL -> 137.
-        raise typer.Exit(e.returncode if e.returncode >= 0 else 128 - e.returncode)
+        child = subprocess.Popen(cmd)
     except OSError as e:
         typer.echo(f"{cmd[0]}: {e.strerror}", err=True)
         raise typer.Exit(127)
+    while True:
+        try:
+            returncode = child.wait()
+            break
+        except KeyboardInterrupt:
+            continue
+    if returncode != 0:
+        # Killed by signal N (returncode -N): exit 128 + N as bash does, e.g. SIGINT -> 130, SIGKILL -> 137.
+        raise typer.Exit(returncode if returncode >= 0 else 128 - returncode)
 
 
 def fail(msg: str) -> None:
