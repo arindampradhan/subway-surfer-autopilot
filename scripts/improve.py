@@ -56,8 +56,9 @@ def run(*cmd: str) -> None:
     try:
         child = subprocess.Popen(cmd)
     except OSError as e:
+        # As bash: 127 when it doesn't exist, 126 when it exists but can't be run (not executable, a directory).
         typer.echo(f"{cmd[0]}: {e.strerror}", err=True)
-        raise typer.Exit(127)
+        raise typer.Exit(127 if isinstance(e, FileNotFoundError) else 126)
     while True:
         try:
             returncode = child.wait()
