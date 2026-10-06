@@ -197,7 +197,7 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
             for band in 0..3 {
                 let Some(z) = f.label.zone(lane, band).filter(|z| z.sure) else { continue };
                 any = true;
-                let pred = model.predict(&f.img, &masks[lane][band]);
+                let pred = model.predict(&f.img, &masks[lane][band], band);
                 r.zones += 1;
                 ok += (pred == z.obstacle) as usize;
                 *r.confusion.entry(format!("{:?}", z.obstacle)).or_default().entry(format!("{pred:?}")).or_default() += 1;
@@ -224,12 +224,12 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
 /// `sidecar/zone_cnn.py`: `crops.bin` (N × CROP × CROP × 3 bytes) and `meta.jsonl` (one line per
 /// crop: set, frame id, zone, class). The crops come from the same code the live perceiver
 /// uses, so what the CNN trains on is what it sees while playing.
-pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, native: bool, crop: usize, ctx: f32, dual: bool) -> Result<usize> {
+pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, native: bool, crop: usize, ctx: f32, dual: bool, ctx_far: Option<f32>) -> Result<usize> {
     use std::io::Write;
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
     let calib = Calibration::load_or_default(calib_path);
     std::fs::create_dir_all(out)?;
-    std::fs::write(out.join("crops.json"), serde_json::json!({"crop": crop, "native": native, "ctx": ctx, "dual": dual}).to_string())?;
+    std::fs::write(out.join("crops.json"), serde_json::json!({"crop": crop, "native": native, "ctx": ctx, "dual": dual, "ctx_far": ctx_far}).to_string())?;
     let mut bin = std::io::BufWriter::new(std::fs::File::create(out.join("crops.bin"))?);
     let mut meta = std::io::BufWriter::new(std::fs::File::create(out.join("meta.jsonl"))?);
     let mut n = 0;
@@ -246,7 +246,8 @@ pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf],
             for lane in 0..3 {
                 for band in 0..3 {
                     let Some(z) = label.zone(lane, band).filter(|z| z.sure && z.obstacle != Obstacle::Unknown) else { continue };
-                    bin.write_all(&crate::perception::cnn::zone_input(&img, &masks[lane][band], crop, ctx, dual))?;
+                    let c = if band == 2 { ctx_far.unwrap_or(ctx) } else { ctx };
+                    bin.write_all(&crate::perception::cnn::zone_input(&img, &masks[lane][band], crop, c, dual))?;
                     writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "lane": lane, "band": band, "class": format!("{:?}", z.obstacle)}))?;
                     n += 1;
                 }

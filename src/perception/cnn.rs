@@ -95,6 +95,14 @@ pub struct ZoneCnn {
     /// Two views stacked as six channels: the masked zone itself, then the `ctx` context crop.
     #[serde(default)]
     pub dual: bool,
+    /// Context for the far band if different from `ctx` (far zones are small, so a wide context
+    /// mostly shows neighbouring lanes and makes clear far zones look blocked).
+    #[serde(default)]
+    pub ctx_far: Option<f32>,
+    /// Added to the logits before picking a class (e.g. favour Free to cut false alarms),
+    /// tuned on a validation set.
+    #[serde(default)]
+    pub bias: Vec<f32>,
 }
 
 fn default_crop() -> usize {
@@ -154,6 +162,10 @@ fn dense(x: &[f32], l: &Dense, relu: bool) -> Vec<f32> {
 }
 
 impl ZoneCnn {
+    pub fn ctx_for(&self, band: usize) -> f32 {
+        if band == 2 { self.ctx_far.unwrap_or(self.ctx) } else { self.ctx }
+    }
+
     pub fn load(path: &Path) -> Result<ZoneCnn> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let m: ZoneCnn = serde_json::from_str(&text)?;
@@ -183,7 +195,10 @@ impl ZoneCnn {
             x = conv_relu_pool(&x, size, l);
             size /= 2;
         }
-        let logits = dense(&dense(&x, &self.fc1, true), &self.fc2, false);
+        let mut logits = dense(&dense(&x, &self.fc1, true), &self.fc2, false);
+        for (l, b) in logits.iter_mut().zip(&self.bias) {
+            *l += b;
+        }
         let m = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let exp: Vec<f32> = logits.iter().map(|z| (z - m).exp()).collect();
         let sum: f32 = exp.iter().sum();
@@ -206,10 +221,11 @@ impl Classifier {
         }
     }
 
-    pub fn predict(&self, img: &RgbImage, mask: &ZoneMask) -> Obstacle {
+    /// `band`: 0 near, 1 mid, 2 far.
+    pub fn predict(&self, img: &RgbImage, mask: &ZoneMask, band: usize) -> Obstacle {
         match self {
             Classifier::Logistic(m) => m.predict(&super::model::zone_vector(img, mask)).0,
-            Classifier::Cnn(m) => m.predict(&zone_input(img, mask, m.crop, m.ctx, m.dual)).0,
+            Classifier::Cnn(m) => m.predict(&zone_input(img, mask, m.crop, m.ctx_for(band), m.dual)).0,
         }
     }
 
@@ -258,6 +274,8 @@ mod tests {
             hires: false,
             ctx: 0.0,
             dual: false,
+            ctx_far: None,
+            bias: Vec::new(),
         };
         let (o, p) = net.predict(&vec![255; CROP * CROP * 3]);
         assert_eq!(o, Obstacle::TrainBody);

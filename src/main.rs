@@ -300,6 +300,9 @@ enum Cmd {
         /// Stack the masked zone crop and the context crop as two views (six channels).
         #[arg(long)]
         dual: bool,
+        /// Context for far zones, if different from --ctx.
+        #[arg(long)]
+        ctx_far: Option<f32>,
     },
     /// Fit classifier thresholds to Claude's labels and report held-out accuracy (M2).
     Fit {
@@ -545,8 +548,8 @@ async fn main() -> Result<()> {
                 started.elapsed().as_secs_f64() * 1000.0 / labels.len() as f64
             );
         }
-        Cmd::ZoneCrops { frames_dirs, labels, out, native, crop, ctx, dual } => {
-            let n = ssbot::train::dump_zone_crops(&cfg, &cli.calibration, &frames_dirs, &labels, &out, native, crop, ctx, dual)?;
+        Cmd::ZoneCrops { frames_dirs, labels, out, native, crop, ctx, dual, ctx_far } => {
+            let n = ssbot::train::dump_zone_crops(&cfg, &cli.calibration, &frames_dirs, &labels, &out, native, crop, ctx, dual, ctx_far)?;
             println!("{n} zone crops in {}", out.display());
         }
         Cmd::EvalZones { frames_dirs, labels, model } => {

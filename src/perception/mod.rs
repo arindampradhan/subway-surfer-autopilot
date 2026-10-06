@@ -267,8 +267,8 @@ impl Perceiver {
         }
         let classes = match &self.model {
             Some(m) => match (hires_img, &self.hires_masks) {
-                (Some(h), Some((_, hm))) => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(h, &hm[l][b]))),
-                _ => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(img, &masks[l][b]))),
+                (Some(h), Some((_, hm))) => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(h, &hm[l][b], b))),
+                _ => [0, 1, 2].map(|l| [0, 1, 2].map(|b| m.predict(img, &masks[l][b], b))),
             },
             None => zones.map(|lane| lane.map(|f| classify_zone(&f, &th))),
         };
