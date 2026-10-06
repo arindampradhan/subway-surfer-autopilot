@@ -175,6 +175,9 @@ pub struct EvalReport {
     pub missed_hazards: (usize, usize),
     /// Zones labelled free that the model called a hazard (these make the bot dodge for nothing).
     pub false_alarms: (usize, usize),
+    /// Barrier zones (low, high, overhead) read as exactly the right barrier type: the class
+    /// decides jump versus roll.
+    pub barrier_recall: (usize, usize),
 }
 
 /// Scores a saved zone model on labelled frames it may not have trained on. Only sure zones of
@@ -198,6 +201,10 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
                 r.zones += 1;
                 ok += (pred == z.obstacle) as usize;
                 *r.confusion.entry(format!("{:?}", z.obstacle)).or_default().entry(format!("{pred:?}")).or_default() += 1;
+                if matches!(z.obstacle, Obstacle::LowBarrier | Obstacle::HighBarrier | Obstacle::OverheadBar) {
+                    r.barrier_recall.1 += 1;
+                    r.barrier_recall.0 += (pred == z.obstacle) as usize;
+                }
                 if z.obstacle.is_hazard() {
                     r.missed_hazards.1 += 1;
                     r.missed_hazards.0 += (pred == Obstacle::Free) as usize;
@@ -217,12 +224,12 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
 /// `sidecar/zone_cnn.py`: `crops.bin` (N × CROP × CROP × 3 bytes) and `meta.jsonl` (one line per
 /// crop: set, frame id, zone, class). The crops come from the same code the live perceiver
 /// uses, so what the CNN trains on is what it sees while playing.
-pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, native: bool, crop: usize, ctx: f32) -> Result<usize> {
+pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, native: bool, crop: usize, ctx: f32, dual: bool) -> Result<usize> {
     use std::io::Write;
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
     let calib = Calibration::load_or_default(calib_path);
     std::fs::create_dir_all(out)?;
-    std::fs::write(out.join("crops.json"), serde_json::json!({"crop": crop, "native": native, "ctx": ctx}).to_string())?;
+    std::fs::write(out.join("crops.json"), serde_json::json!({"crop": crop, "native": native, "ctx": ctx, "dual": dual}).to_string())?;
     let mut bin = std::io::BufWriter::new(std::fs::File::create(out.join("crops.bin"))?);
     let mut meta = std::io::BufWriter::new(std::fs::File::create(out.join("meta.jsonl"))?);
     let mut n = 0;
@@ -239,7 +246,7 @@ pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, frames_dirs: &[PathBuf],
             for lane in 0..3 {
                 for band in 0..3 {
                     let Some(z) = label.zone(lane, band).filter(|z| z.sure && z.obstacle != Obstacle::Unknown) else { continue };
-                    bin.write_all(&crate::perception::cnn::zone_crop(&img, &masks[lane][band], crop, ctx))?;
+                    bin.write_all(&crate::perception::cnn::zone_input(&img, &masks[lane][band], crop, ctx, dual))?;
                     writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "lane": lane, "band": band, "class": format!("{:?}", z.obstacle)}))?;
                     n += 1;
                 }

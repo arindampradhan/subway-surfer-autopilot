@@ -19,6 +19,8 @@ PYTHON=${PYTHON:-../.venv/bin/python}
 EXCLUDE=${EXCLUDE:-"human_round2"}
 CANDIDATE_MODEL=zone_model.candidate.json   # a CNN, see sidecar/zone_cnn.py
 CANDIDATE_CALIB=calibration.candidate.toml
+# Never trained on: the fixed test set the eyes are scored on (`ssbot eval-zones data/$FROZEN`).
+FROZEN=${FROZEN:-crash_r3}
 
 stage=${1:?usage: improve.sh base|train|verify <tag> [runs]}
 tag=${2:?need a round tag, e.g. r1}
@@ -45,7 +47,7 @@ case "$stage" in
     # shellcheck disable=SC2046
     # Full-resolution crops with 2x context around each zone: held-out missed hazards fell 36%.
     "$SSBOT" zone-crops $(labelled_dirs) --out data/zone_crops --native --crop 48 --ctx 2.0
-    "$PYTHON" sidecar/zone_cnn.py --holdout "" --export "$CANDIDATE_MODEL"
+    "$PYTHON" sidecar/zone_cnn.py --holdout "$FROZEN" --export "$CANDIDATE_MODEL"
     cp calibration.toml "$CANDIDATE_CALIB"
     sed -i.bak "s#^zone_model = .*#zone_model = \"$CANDIDATE_MODEL\"#" "$CANDIDATE_CALIB" && rm -f "$CANDIDATE_CALIB.bak"
     echo

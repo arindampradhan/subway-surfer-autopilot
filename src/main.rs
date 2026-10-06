@@ -268,6 +268,19 @@ enum Cmd {
         #[arg(long)]
         from: Option<f64>,
     },
+    /// Copy frames where the eyes report a barrier (from run folders or a bench report) into a
+    /// folder for labelling: barriers are the scarce class.
+    Mine {
+        /// Run folders, or a `runs/bench_<tag>.json`.
+        sources: Vec<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 6)]
+        per_run: usize,
+        /// Least time between two picked frames of one run.
+        #[arg(long, default_value_t = 400.0)]
+        gap_ms: f64,
+    },
     /// Write labelled zone crops (the CNN's training data) for `sidecar/zone_cnn.py`.
     ZoneCrops {
         frames_dirs: Vec<PathBuf>,
@@ -284,6 +297,9 @@ enum Cmd {
         /// Grow each zone's box by this fraction on every side and keep the surroundings.
         #[arg(long, default_value_t = 0.0)]
         ctx: f32,
+        /// Stack the masked zone crop and the context crop as two views (six channels).
+        #[arg(long)]
+        dual: bool,
     },
     /// Fit classifier thresholds to Claude's labels and report held-out accuracy (M2).
     Fit {
@@ -490,6 +506,19 @@ async fn main() -> Result<()> {
             let (n, counts) = ssbot::il::build(&runs, &out, &opts)?;
             println!("{n} frames in {} (stay {}, left {}, right {}, jump {}, roll {})", out.display(), counts[0], counts[1], counts[2], counts[3], counts[4]);
         }
+        Cmd::Mine { sources, out, per_run, gap_ms } => {
+            let mut dirs: Vec<PathBuf> = Vec::new();
+            for s in sources {
+                if s.extension().is_some_and(|e| e == "json") {
+                    let r: ssbot::bench::BenchReport = serde_json::from_str(&std::fs::read_to_string(&s)?)?;
+                    dirs.extend(r.run_dirs.into_iter().map(PathBuf::from));
+                } else {
+                    dirs.push(s);
+                }
+            }
+            let n = ssbot::see::mine_barriers(&cfg, &cli.calibration, &dirs, &out, per_run, gap_ms)?;
+            println!("{n} barrier frames from {} runs in {}", dirs.len(), out.display());
+        }
         Cmd::See { frames_dir, out, n, from } => {
             let k = ssbot::see::sheet(&cfg, &cli.calibration, &frames_dir, &out, n, from)?;
             println!("{k} frames drawn in {}", out.display());
@@ -516,8 +545,8 @@ async fn main() -> Result<()> {
                 started.elapsed().as_secs_f64() * 1000.0 / labels.len() as f64
             );
         }
-        Cmd::ZoneCrops { frames_dirs, labels, out, native, crop, ctx } => {
-            let n = ssbot::train::dump_zone_crops(&cfg, &cli.calibration, &frames_dirs, &labels, &out, native, crop, ctx)?;
+        Cmd::ZoneCrops { frames_dirs, labels, out, native, crop, ctx, dual } => {
+            let n = ssbot::train::dump_zone_crops(&cfg, &cli.calibration, &frames_dirs, &labels, &out, native, crop, ctx, dual)?;
             println!("{n} zone crops in {}", out.display());
         }
         Cmd::EvalZones { frames_dirs, labels, model } => {
@@ -531,8 +560,19 @@ async fn main() -> Result<()> {
             let r = ssbot::train::eval_zones(&cfg, &cli.calibration, &model, &frames_dirs, &labels)?;
             println!("{}", serde_json::to_string_pretty(&r)?);
             println!(
-                "{} sure zones on {} frames: accuracy {:.3}; missed hazards {}/{}; false alarms {}/{}",
-                r.zones, r.frames, r.accuracy, r.missed_hazards.0, r.missed_hazards.1, r.false_alarms.0, r.false_alarms.1
+                "{} sure zones on {} frames: accuracy {:.3}; missed hazards {}/{} ({:.1}%); false alarms {}/{} ({:.1}%); barrier recall {}/{} ({:.1}%)",
+                r.zones,
+                r.frames,
+                r.accuracy,
+                r.missed_hazards.0,
+                r.missed_hazards.1,
+                100.0 * r.missed_hazards.0 as f64 / r.missed_hazards.1.max(1) as f64,
+                r.false_alarms.0,
+                r.false_alarms.1,
+                100.0 * r.false_alarms.0 as f64 / r.false_alarms.1.max(1) as f64,
+                r.barrier_recall.0,
+                r.barrier_recall.1,
+                100.0 * r.barrier_recall.0 as f64 / r.barrier_recall.1.max(1) as f64,
             );
         }
         Cmd::TrainZones { frames_dirs, labels, out, epochs, l2, write } => {

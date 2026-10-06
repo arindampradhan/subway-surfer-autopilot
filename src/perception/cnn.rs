@@ -42,6 +42,18 @@ pub fn zone_crop(img: &RgbImage, mask: &ZoneMask, size: usize, ctx: f32) -> Vec<
     image::imageops::resize(&bbox, size as u32, size as u32, image::imageops::FilterType::Triangle).into_raw()
 }
 
+/// The network input for one zone: the context crop, or with `dual` the masked zone crop
+/// followed by the context crop (each `size`×`size`×3, row-major).
+pub fn zone_input(img: &RgbImage, mask: &ZoneMask, size: usize, ctx: f32, dual: bool) -> Vec<u8> {
+    if dual {
+        let mut v = zone_crop(img, mask, size, 0.0);
+        v.extend(zone_crop(img, mask, size, ctx));
+        v
+    } else {
+        zone_crop(img, mask, size, ctx)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConvLayer {
     /// `[out][in][3][3]`, flattened.
@@ -80,6 +92,9 @@ pub struct ZoneCnn {
     /// Context grown around each zone's box (0 = the zone only, outside pixels greyed).
     #[serde(default)]
     pub ctx: f32,
+    /// Two views stacked as six channels: the masked zone itself, then the `ctx` context crop.
+    #[serde(default)]
+    pub dual: bool,
 }
 
 fn default_crop() -> usize {
@@ -143,20 +158,24 @@ impl ZoneCnn {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let m: ZoneCnn = serde_json::from_str(&text)?;
         ensure!(m.kind == "cnn", "not a zone CNN");
-        ensure!(m.convs.len() == 3 && m.convs[0].cin == 3, "unexpected layer layout");
+        ensure!(m.convs.len() == 3 && m.convs[0].cin == if m.dual { 6 } else { 3 }, "unexpected layer layout");
         let side = m.crop / 8;
         ensure!(m.fc1.din == m.convs[2].cout * side * side, "fc1 input size doesn't match the conv stack");
         Ok(m)
     }
 
-    /// Class and probability for one RGB crop from `zone_crop`.
-    pub fn predict(&self, crop: &[u8]) -> (Obstacle, f32) {
-        // HWC bytes -> CHW floats in 0..1.
+    /// Class and probability for one input from `zone_input`.
+    pub fn predict(&self, input: &[u8]) -> (Obstacle, f32) {
+        // One or two HWC crops -> CHW floats in 0..1 (the second crop's channels come after).
         let n = self.crop;
-        let mut x = vec![0.0f32; 3 * n * n];
-        for (i, px) in crop.chunks_exact(3).enumerate() {
-            for c in 0..3 {
-                x[c * n * n + i] = px[c] as f32 / 255.0;
+        let views = input.len() / (n * n * 3);
+        let mut x = vec![0.0f32; 3 * views * n * n];
+        for v in 0..views {
+            let crop = &input[v * n * n * 3..(v + 1) * n * n * 3];
+            for (i, px) in crop.chunks_exact(3).enumerate() {
+                for c in 0..3 {
+                    x[(v * 3 + c) * n * n + i] = px[c] as f32 / 255.0;
+                }
             }
         }
         let mut size = n;
@@ -190,7 +209,7 @@ impl Classifier {
     pub fn predict(&self, img: &RgbImage, mask: &ZoneMask) -> Obstacle {
         match self {
             Classifier::Logistic(m) => m.predict(&super::model::zone_vector(img, mask)).0,
-            Classifier::Cnn(m) => m.predict(&zone_crop(img, mask, m.crop, m.ctx)).0,
+            Classifier::Cnn(m) => m.predict(&zone_input(img, mask, m.crop, m.ctx, m.dual)).0,
         }
     }
 
@@ -238,6 +257,7 @@ mod tests {
             crop: CROP,
             hires: false,
             ctx: 0.0,
+            dual: false,
         };
         let (o, p) = net.predict(&vec![255; CROP * CROP * 3]);
         assert_eq!(o, Obstacle::TrainBody);
