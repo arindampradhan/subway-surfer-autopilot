@@ -24,6 +24,8 @@ models/head-*-candidate/
 
 # old zone models: archived under models/archive/, only the live zone_model.json is tracked
 /zone_model.*.json
+zone_model.candidate.json
+zone_model.before-*.json
 /models/archive/
 
 # Python bytecode and training logs (local only)
