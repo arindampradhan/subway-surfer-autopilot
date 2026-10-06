@@ -505,8 +505,8 @@ async fn main() -> Result<()> {
             eprintln!("check them with `ssbot review {} --manual`, then `ssbot fit`", frames_dir.display());
         }
         Cmd::IlData { runs, out, lead_ms, stride, any_source } => {
-            let opts = ssbot::il::IlOpts { lead_ms, stride, size: (128, 72), human_only: !any_source };
-            let (n, counts) = ssbot::il::build(&runs, &out, &opts)?;
+            let opts = ssbot::il_data::IlOpts { lead_ms, stride, size: (128, 72), human_only: !any_source };
+            let (n, counts) = ssbot::il_data::build(&runs, &out, &opts)?;
             println!("{n} frames in {} (stay {}, left {}, right {}, jump {}, roll {})", out.display(), counts[0], counts[1], counts[2], counts[3], counts[4]);
         }
         Cmd::Mine { sources, out, per_run, gap_ms } => {
