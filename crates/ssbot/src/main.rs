@@ -500,8 +500,16 @@ async fn main() -> Result<()> {
             eprintln!("selected {n} frames into {}", out.display());
         }
         Cmd::Import { frames_dir, annotations, format, classes, labels, min_overlap, force } => {
-            let (n, total) =
-                label::cmd::import(&frames_dir, &annotations, format, classes, &labels, &cli.calibration, min_overlap, force)?;
+            let (n, total) = label::cmd::import(label::cmd::ImportOpts {
+                frames_dir: &frames_dir,
+                annotations: &annotations,
+                format,
+                classes,
+                labels_dir: &labels,
+                calibration: &cli.calibration,
+                min_overlap,
+                force,
+            })?;
             eprintln!("imported {n} labelled frames (of {total} in {}) into {}", frames_dir.display(), labels.join(format!("{}.jsonl", run_name(&frames_dir))).display());
             eprintln!("check them with `ssbot review {} --manual`, then `ssbot fit`", frames_dir.display());
         }

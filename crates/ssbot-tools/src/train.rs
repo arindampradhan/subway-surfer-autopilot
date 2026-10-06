@@ -394,8 +394,16 @@ pub async fn train_by_human(cfg: &Config, calib_path: &Path, opts: &HumanOpts) -
                 crate::label::cmd::label(&lo).await?;
             }
             Labeller::Import(ann) => {
-                let (n, total) =
-                    crate::label::cmd::import(&pick_dir, &ann, None, None, labels_dir, calib_path, 0.4, false)?;
+                let (n, total) = crate::label::cmd::import(crate::label::cmd::ImportOpts {
+                    frames_dir: &pick_dir,
+                    annotations: &ann,
+                    format: None,
+                    classes: None,
+                    labels_dir,
+                    calibration: calib_path,
+                    min_overlap: 0.4,
+                    force: false,
+                })?;
                 eprintln!("imported {n} of {total} frames");
             }
             Labeller::Manual | Labeller::Auto => {
