@@ -64,6 +64,15 @@ def fail(msg: str) -> None:
     raise typer.Exit(1)
 
 
+def copy(src: Path, dst: Path) -> None:
+    """`cp src dst`, creating dst's directory; a failure is one line on stderr like cp's, then exit 1."""
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+    except OSError as e:
+        fail(f"cp: {e.filename or src}: {e.strerror or e}")
+
+
 def non_empty(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
@@ -124,9 +133,9 @@ def train(
     run(ssbot, "zone-crops", *labelled_dirs(exclude), "--out", "data/zone_crops", "--native", "--crop", "48", "--ctx", "2.0")
     CANDIDATE_MODEL.parent.mkdir(parents=True, exist_ok=True)
     run(python, "sidecar/zone_cnn.py", "--holdout", frozen, "--export", str(CANDIDATE_MODEL))
+    copy(Path("calibration.toml"), CANDIDATE_CALIB)
     line = f'zone_model = "{CANDIDATE_MODEL}"'.encode()
-    calib = Path("calibration.toml").read_bytes()
-    CANDIDATE_CALIB.write_bytes(re.sub(rb"(?m)^zone_model = .*", lambda _: line, calib))
+    CANDIDATE_CALIB.write_bytes(re.sub(rb"(?m)^zone_model = .*", lambda _: line, CANDIDATE_CALIB.read_bytes()))
     typer.echo()
     typer.echo(f"Candidate saved as {CANDIDATE_MODEL}. Next: scripts/improve.py verify {tag}")
 
@@ -146,9 +155,8 @@ def verify(tag: Tag, runs: Runs = 20, ssbot: Ssbot = "./target/release/ssbot") -
         return
     if wins:
         backup = ARCHIVE / f"zone_model.before-{tag}.json"
-        ARCHIVE.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(LIVE_MODEL, backup)
-        shutil.copyfile(CANDIDATE_MODEL, LIVE_MODEL)
+        copy(LIVE_MODEL, backup)
+        copy(CANDIDATE_MODEL, LIVE_MODEL)
         typer.echo(f"Promoted: candidate beat the live model on median survival (old model kept as {backup}).")
     else:
         typer.echo("Not promoted: the candidate did not beat the live model on median survival.")
