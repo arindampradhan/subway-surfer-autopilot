@@ -2,7 +2,7 @@
 zones? Reports per-class accuracy and seconds per frame, to decide whether it could label data
 (a teacher for the fast classifier) or act as a slow second opinion. Offline only (CLAUDE.md).
 
-  ../.venv/bin/python sidecar/vlm_eval.py --model gemma4:latest --set crash_r3 --n 40
+  ../.venv/bin/python sidecar/vlm_eval.py --model qwen3-vl:8b-instruct --set crash_r3 --n 40
   ../.venv/bin/python sidecar/vlm_eval.py --model qwen3-vl:8b-instruct --set crash_r3 --n 60 --crops
 """
 
@@ -86,7 +86,7 @@ def zone_crop(frame, quad, width=224):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="gemma4:latest")
+    ap.add_argument("--model", default="qwen3-vl:8b-instruct")
     ap.add_argument("--set", default="crash_r3")
     ap.add_argument("--n", type=int, default=40)
     ap.add_argument("--host", default="http://localhost:11434")
