@@ -78,13 +78,25 @@ def labelled_dirs(exclude: str) -> list[str]:
 
 
 def candidate_wins(tag: str) -> bool:
-    """True when the candidate's median survival beats the live model's, from the two bench reports."""
+    """True when the candidate's median survival beats the live model's, from the two bench reports.
+
+    Raises ValueError with the reason when a report can't be read or the medians can't be compared."""
 
     def median(kind: str) -> float:
-        with open(f"runs/bench_{tag}-{kind}.json") as f:
-            return json.load(f)["aggregate"]["survival_median_s"]
+        path = f"runs/bench_{tag}-{kind}.json"
+        try:
+            with open(path) as f:
+                return json.load(f)["aggregate"]["survival_median_s"]
+        except OSError as e:
+            raise ValueError(f"{path}: {e.strerror or e}") from e
+        except Exception as e:  # not JSON, or no aggregate.survival_median_s
+            raise ValueError(f"{path}: {type(e).__name__}: {e}") from e
 
-    return median("candidate") > median("base")
+    base, candidate = median("base"), median("candidate")
+    try:
+        return candidate > base
+    except TypeError as e:  # e.g. a null median
+        raise ValueError(f"survival_median_s base {json.dumps(base)}, candidate {json.dumps(candidate)}") from e
 
 
 @app.command()
@@ -126,7 +138,12 @@ def verify(tag: Tag, runs: Runs = 20, ssbot: Ssbot = "./target/release/ssbot") -
     run(ssbot, "--calibration", str(CANDIDATE_CALIB), "bench", "--runs", str(runs), "--tag", f"{tag}-candidate")
     typer.echo()
     run(ssbot, "bench-compare", f"runs/bench_{tag}-base.json", f"runs/bench_{tag}-candidate.json")
-    if candidate_wins(tag):
+    try:
+        wins = candidate_wins(tag)
+    except Exception as e:  # like improve.sh: a report that can't be read or compared never promotes
+        typer.echo(f"Not promoted: could not compare bench reports ({e})")
+        return
+    if wins:
         backup = ARCHIVE / f"zone_model.before-{tag}.json"
         ARCHIVE.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(LIVE_MODEL, backup)
