@@ -1,7 +1,6 @@
 //! Perception: frame → typed `Observation` (SPEC §4.3). Pure Rust, no ML in v1.
 
 pub mod classify;
-pub mod fit;
 pub mod cnn;
 pub mod model;
 pub mod state;

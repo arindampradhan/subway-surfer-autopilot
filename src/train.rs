@@ -10,14 +10,14 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use crate::advisor_data::{self, obs_from_label};
 use crate::config::Config;
+use crate::fit::LabelledFrame;
 use crate::label::select::list_frames;
 use crate::label::{labels_path, load_final_labels, run_name};
-use crate::perception::fit::LabelledFrame;
 use crate::perception::model::ZoneModel;
 use crate::perception::zones::Calibration;
 use crate::perception::{GameState, Obstacle, Perceiver};
-use crate::policy::dataset::{self, obs_from_label};
 use crate::policy::reflex::Reflex;
 
 /// Labelled frames from several directories, resized to the working size. Frame ids are
@@ -442,7 +442,7 @@ pub async fn train_by_human(cfg: &Config, calib_path: &Path, opts: &HumanOpts) -
         }
     }
     labelled.sort_by_key(|(id, _)| *id);
-    let ds = dataset::build(opts.situations, 1, cfg.advisor.wording, &labelled);
+    let ds = advisor_data::build(opts.situations, 1, cfg.advisor.wording, &labelled);
     let adv = data.join("advisor");
     std::fs::create_dir_all(&adv)?;
     for (split, recs) in [

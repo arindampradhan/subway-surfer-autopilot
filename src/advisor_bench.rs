@@ -8,12 +8,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::Action;
-use super::advisor::{best_action, options_with};
-use super::reflex::Reflex;
 use crate::config::{PolicyConfig, Wording};
 use crate::facts::facts;
 use crate::perception::{Lane, LaneView, Obstacle, Observation};
+use crate::policy::Action;
+use crate::policy::advisor::{best_action, options_with};
+use crate::policy::reflex::Reflex;
 use crate::sidecar::{Reply, Request, SidecarLink};
 
 pub struct Case {

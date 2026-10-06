@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use ssbot::fit::{LabelledFrame, sequence_accuracy, zone_accuracy, zone_samples};
 use ssbot::label::FrameLabel;
-use ssbot::perception::fit::{LabelledFrame, sequence_accuracy, zone_accuracy, zone_samples};
 use ssbot::perception::zones::{Calibration, Marker, Rect};
 use ssbot::perception::{GameState, Perceiver};
 

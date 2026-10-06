@@ -13,14 +13,14 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::Serialize;
 
-use super::Action;
-use super::advisor::options_with;
-use super::bench::cases;
-use super::reflex::Reflex;
+use crate::advisor_bench::cases;
 use crate::config::{PolicyConfig, Wording};
 use crate::facts::facts;
 use crate::label::FrameLabel;
 use crate::perception::{GameState, Lane, LaneView, Obstacle, Observation};
+use crate::policy::Action;
+use crate::policy::advisor::options_with;
+use crate::policy::reflex::Reflex;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Record {

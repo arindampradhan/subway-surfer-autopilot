@@ -7,10 +7,10 @@ use std::path::Path;
 use image::RgbImage;
 use serde::Serialize;
 
-use super::classify::{ZoneFeatures, classify_zone};
-use super::zones::{Calibration, Thresholds};
-use super::{GameState, Obstacle, Perceiver};
 use crate::label::FrameLabel;
+use crate::perception::classify::{ZoneFeatures, classify_zone};
+use crate::perception::zones::{Calibration, Thresholds};
+use crate::perception::{GameState, Obstacle, Perceiver};
 
 /// Deterministic 80/20 split by frame id.
 pub fn is_test(frame_id: u64) -> bool {

@@ -7,8 +7,8 @@ use clap::{Parser, Subcommand};
 
 use ssbot::config::{CaptureBackend, Config};
 use ssbot::label::cmd::LabelOpts;
+use ssbot::fit::{self, LabelledFrame};
 use ssbot::label::{load_final_labels, run_name};
-use ssbot::perception::fit::{self, LabelledFrame};
 use ssbot::perception::zones::Calibration;
 use ssbot::{bot, calibrate, frames, label, replay};
 
@@ -642,8 +642,8 @@ async fn main() -> Result<()> {
                 cfg.advisor.model = m;
             }
             let (sidecar, mut link) = ssbot::sidecar_process::Sidecar::spawn(&cfg.advisor).await?;
-            eprintln!("{} · {} cases per wording", sidecar.model, ssbot::policy::bench::cases().len());
-            let scores = ssbot::policy::bench::run(&mut link, &ssbot::config::Wording::ALL).await?;
+            eprintln!("{} · {} cases per wording", sidecar.model, ssbot::advisor_bench::cases().len());
+            let scores = ssbot::advisor_bench::run(&mut link, &ssbot::config::Wording::ALL).await?;
             println!("{}", serde_json::to_string_pretty(&scores)?);
             drop(link);
             sidecar.shutdown().await;
@@ -656,7 +656,7 @@ async fn main() -> Result<()> {
                 }
             }
             labelled.sort_by_key(|(id, _)| *id);
-            let ds = ssbot::policy::dataset::build(n, seed, cfg.advisor.wording, &labelled);
+            let ds = ssbot::advisor_data::build(n, seed, cfg.advisor.wording, &labelled);
             std::fs::create_dir_all(&out)?;
             for (name, recs) in [("train", &ds.train), ("test_bench", &ds.test_bench), ("test_real", &ds.test_real), ("test_offscreen", &ds.test_offscreen)] {
                 let text: String = recs.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
