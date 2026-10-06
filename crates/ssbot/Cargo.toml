@@ -1,0 +1,23 @@
+[package]
+name = "ssbot"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ssbot"
+path = "src/main.rs"
+
+[dependencies]
+ssbot-core.workspace = true
+ssbot-live.workspace = true
+ssbot-tools.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+image.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber.workspace = true
+
+[features]
+xcap = ["ssbot-live/xcap"]
