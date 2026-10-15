@@ -36,6 +36,19 @@ pub struct ReplayReport {
     pub perceive_p95_ms: f64,
     /// How many frames perception put in each game state.
     pub states: std::collections::BTreeMap<String, usize>,
+    /// Running frames by the level the replayed perceiver reads, with the "nothing but the
+    /// hoverboard is safe" frames of the recorded policy and of the replayed one on them
+    /// (SPEC-roofs-and-powerups R3: fewer on roofs, no more on the ground).
+    pub by_level: std::collections::BTreeMap<String, LevelCounts>,
+    /// Running frames with each power-up timer showing.
+    pub powerups: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+pub struct LevelCounts {
+    pub frames: usize,
+    pub recorded_predicted_crashes: usize,
+    pub predicted_crashes: usize,
 }
 
 pub fn replay(run_dir: &Path, cfg: &Config, calib_path: &Path, use_advice: bool) -> Result<ReplayReport> {
@@ -46,7 +59,9 @@ pub fn replay(run_dir: &Path, cfg: &Config, calib_path: &Path, use_advice: bool)
     let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
     let mut perceiver = Perceiver::new(calib.clone(), base, work);
     let mut reflex = Reflex::new(cfg.policy.clone());
-    let mut arbiter = Arbiter::new(cfg.policy.cooldown_ms, calib.canvas_center).with_hoverboard(cfg.policy.use_hoverboard);
+    let mut arbiter = Arbiter::new(cfg.policy.cooldown_ms, calib.canvas_center)
+        .with_hoverboard(cfg.policy.use_hoverboard)
+        .with_hoverboard_probe(cfg.policy.hoverboard_probe);
     let mut report = ReplayReport::default();
     let mut lanes = ssbot_engine::policy::LaneTracker::default();
     let mut was_running = false;
@@ -54,10 +69,11 @@ pub fn replay(run_dir: &Path, cfg: &Config, calib_path: &Path, use_advice: bool)
     let t0 = Instant::now();
 
     for (id, path) in frames {
-        let img = image::open(&path).with_context(|| format!("opening {}", path.display()))?.to_rgb8();
-        let img = image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle);
+        let full = image::open(&path).with_context(|| format!("opening {}", path.display()))?.to_rgb8();
+        let img = image::imageops::resize(&full, work.0, work.1, image::imageops::FilterType::Triangle);
         let start = Instant::now();
-        let m = perceiver.measure(id, &img);
+        // The saved frame is the live canvas, which the bot also hands to full-resolution models.
+        let m = perceiver.measure_with(id, &img, Some(&full));
         perceive_ms.push(start.elapsed().as_secs_f64() * 1000.0);
         let mut obs = m.obs;
         if obs.state == GameState::Running {
@@ -89,7 +105,16 @@ pub fn replay(run_dir: &Path, cfg: &Config, calib_path: &Path, use_advice: bool)
         *report.states.entry(format!("{:?}", obs.state)).or_default() += 1;
         if obs.state == GameState::Running {
             report.emergencies += out.emergency as usize;
-            report.predicted_crashes += (out.mask == vec![Action::Hoverboard]) as usize;
+            let crash = out.mask == vec![Action::Hoverboard];
+            report.predicted_crashes += crash as usize;
+            let c = report.by_level.entry(format!("{:?}", obs.level)).or_default();
+            c.frames += 1;
+            c.predicted_crashes += crash as usize;
+            c.recorded_predicted_crashes +=
+                recorded.is_some_and(|e| e.obs.state == GameState::Running && e.reflex.mask == vec![Action::Hoverboard]) as usize;
+            if let Some(p) = obs.active_powerup {
+                *report.powerups.entry(p.name().to_string()).or_default() += 1;
+            }
         }
         if let Some(e) = recorded {
             report.state_changed += (e.obs.state != obs.state) as usize;

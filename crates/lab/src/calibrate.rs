@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use ssbot_engine::config::Config;
-use ssbot_engine::perception::GameState;
+use ssbot_engine::perception::{GameState, Level};
 use ssbot_engine::perception::zones::Calibration;
 use ssbot_runtime::browser::Game;
 use ssbot_runtime::capture::{Crop, FrameSource, screencast::Screencast};
@@ -19,8 +19,10 @@ use ssbot_runtime::capture::{Crop, FrameSource, screencast::Screencast};
 use crate::label::overlay::calibration_preview;
 use crate::label::select::list_frames;
 
-pub fn preview(frames_dir: &Path, calib_path: &Path, out_dir: &Path, max: usize) -> Result<Vec<PathBuf>> {
-    let calib = Calibration::load_or_default(calib_path);
+/// `level`: which zone set to draw (the roof set falls back to the ground set until calibrated).
+pub fn preview(frames_dir: &Path, calib_path: &Path, out_dir: &Path, max: usize, level: Level) -> Result<Vec<PathBuf>> {
+    let mut calib = Calibration::load_or_default(calib_path);
+    calib.lanes = calib.lanes_for(level);
     std::fs::create_dir_all(out_dir)?;
     let frames = list_frames(frames_dir)?;
     let step = (frames.len() / max.max(1)).max(1);

@@ -19,7 +19,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use ssbot_engine::perception::zones::{BAND_NAMES, LANE_NAMES, parse_zone_id, zone_id};
-use ssbot_engine::perception::{GameState, Obstacle};
+use ssbot_engine::perception::{GameState, Level, Obstacle, PowerUp};
+
+fn unknown() -> String {
+    "unknown".into()
+}
+
+pub const RUNNER_LEVELS: [&str; 4] = ["ground", "roof", "air", "unknown"];
+pub const ACTIVE_POWERUPS: [&str; 8] = ["none", "jetpack", "super_sneakers", "pogo_stick", "magnet", "multiplier", "hoverboard", "unknown"];
+pub const POWERUP_KINDS: [&str; 8] = ["none", "jetpack", "super_sneakers", "pogo_stick", "magnet", "multiplier", "mystery_box", "unknown"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZoneLabel {
@@ -28,6 +36,9 @@ pub struct ZoneLabel {
     pub coins: bool,
     pub powerup: bool,
     pub sure: bool,
+    /// One of `POWERUP_KINDS`; labels before guide v2 read as "unknown".
+    #[serde(default = "unknown")]
+    pub powerup_kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,9 +50,39 @@ pub struct FrameLabel {
     pub player_action: String,
     pub zones: Vec<ZoneLabel>,
     pub notes: String,
+    /// One of `RUNNER_LEVELS`; labels before guide v2 read as "unknown".
+    #[serde(default = "unknown")]
+    pub runner_level: String,
+    /// One of `ACTIVE_POWERUPS`; labels before guide v2 read as "unknown".
+    #[serde(default = "unknown")]
+    pub active_powerup: String,
 }
 
 impl FrameLabel {
+    /// The labelled level, if the label says.
+    pub fn level(&self) -> Option<Level> {
+        match self.runner_level.as_str() {
+            "ground" => Some(Level::Ground),
+            "roof" => Some(Level::Roof),
+            "air" => Some(Level::Air),
+            _ => None,
+        }
+    }
+
+    /// The labelled active power-up: `None` when the label doesn't say, `Some(None)` for none.
+    pub fn powerup(&self) -> Option<Option<PowerUp>> {
+        Some(match self.active_powerup.as_str() {
+            "none" => None,
+            "jetpack" => Some(PowerUp::Jetpack),
+            "super_sneakers" => Some(PowerUp::SuperSneakers),
+            "pogo_stick" => Some(PowerUp::PogoStick),
+            "magnet" => Some(PowerUp::Magnet),
+            "multiplier" => Some(PowerUp::Multiplier),
+            "hoverboard" => Some(PowerUp::Hoverboard),
+            _ => return None,
+        })
+    }
+
     pub fn zone(&self, lane: usize, band: usize) -> Option<&ZoneLabel> {
         let id = zone_id(lane, band);
         self.zones.iter().find(|z| z.zone == id)
@@ -75,20 +116,23 @@ pub fn frame_label_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["game_state", "player_lane", "player_action", "zones", "notes"],
+        "required": ["game_state", "player_lane", "player_action", "runner_level", "active_powerup", "zones", "notes"],
         "properties": {
             "game_state": {"type": "string", "enum": states},
             "player_lane": {"type": "string", "enum": ["L", "C", "R", "unknown"]},
             "player_action": {"type": "string", "enum": ["running", "jumping", "rolling", "switching", "unknown"]},
+            "runner_level": {"type": "string", "enum": RUNNER_LEVELS},
+            "active_powerup": {"type": "string", "enum": ACTIVE_POWERUPS},
             "zones": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["zone", "obstacle", "coins", "powerup", "sure"],
+                    "required": ["zone", "obstacle", "powerup_kind", "coins", "powerup", "sure"],
                     "properties": {
                         "zone": {"type": "string", "enum": all_zone_ids()},
                         "obstacle": {"type": "string", "enum": obstacles},
+                        "powerup_kind": {"type": "string", "enum": POWERUP_KINDS},
                         "coins": {"type": "boolean"},
                         "powerup": {"type": "boolean"},
                         "sure": {"type": "boolean"}
@@ -148,6 +192,11 @@ pub struct Fix {
     pub obstacle: Option<Obstacle>,
     pub game_state: Option<GameState>,
     pub player_lane: Option<String>,
+    /// Adjudicated runner level or active power-up (guide v2 fields).
+    #[serde(default)]
+    pub runner_level: Option<String>,
+    #[serde(default)]
+    pub active_powerup: Option<String>,
 }
 
 pub fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
@@ -202,13 +251,19 @@ pub fn load_final_labels(labels_dir: &Path, run: &str) -> Result<HashMap<u64, Fr
             if let Some(l) = fix.player_lane {
                 label.player_lane = l;
             }
+            if let Some(l) = fix.runner_level {
+                label.runner_level = l;
+            }
+            if let Some(p) = fix.active_powerup {
+                label.active_powerup = p;
+            }
             if let (Some(zone), Some(o)) = (fix.zone, fix.obstacle) {
                 match label.zones.iter_mut().find(|z| z.zone == zone) {
                     Some(z) => {
                         z.obstacle = o;
                         z.sure = true;
                     }
-                    None => label.zones.push(ZoneLabel { zone, obstacle: o, coins: false, powerup: false, sure: true }),
+                    None => label.zones.push(ZoneLabel { zone, obstacle: o, coins: false, powerup: false, sure: true, powerup_kind: unknown() }),
                 }
             }
         }
@@ -254,6 +309,13 @@ mod tests {
         }))
         .unwrap();
         assert!(label.validate().is_ok());
+        // Labels from before guide v2 load with the new fields unknown.
+        assert_eq!((label.level(), label.powerup()), (None, None));
+        assert_eq!(label.zones[0].powerup_kind, "unknown");
+        let props = &s["properties"];
+        assert_eq!(props["runner_level"]["enum"].as_array().unwrap().len(), 4);
+        assert!(s["required"].as_array().unwrap().iter().any(|r| r == "active_powerup"));
+        assert!(props["zones"]["items"]["properties"]["obstacle"]["enum"].as_array().unwrap().iter().any(|o| o == "TrainRoof"));
     }
 
     #[test]

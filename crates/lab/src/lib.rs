@@ -9,6 +9,7 @@ pub mod fit;
 pub mod frames;
 pub mod il_data;
 pub mod label;
+pub mod mine;
 pub mod replay;
 pub mod see;
 pub mod train;

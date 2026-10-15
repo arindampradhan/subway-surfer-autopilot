@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Action, ActionSet, possible_actions};
 use crate::config::PolicyConfig;
-use crate::perception::{GameState, Lane, LaneView, Obstacle, Observation};
+use crate::perception::{GameState, Lane, LaneView, Obstacle, Observation, PowerUp};
 
 /// Distance from the runner to the start of each band, in band lengths.
 const BAND_DISTANCE: [f32; 3] = [0.5, 1.5, 2.5];
@@ -14,6 +14,11 @@ const BAND_DISTANCE: [f32; 3] = [0.5, 1.5, 2.5];
 /// bands per second (measured from live runs: about 5 early, 7 later).
 const SPEED_WINDOW: usize = 9;
 const SPEED_RANGE: (f32, f32) = (3.0, 8.0);
+/// After a jetpack or pogo stick ends, the runner drops back onto a track perception hasn't
+/// tracked for a while: no lane changes for this long, only the emergency rules.
+const LANDING_MS: f64 = 1000.0;
+/// Score for a lane whose ramp leads over the train blocking the current lane.
+const RAMP_BONUS: f32 = 2.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReflexOut {
@@ -41,12 +46,21 @@ pub struct Reflex {
     recent: std::collections::VecDeque<f32>,
     /// Per lane: band of the first hazard and when it was first seen there (ms).
     tracked: [Option<(usize, f64)>; 3],
+    was_flying: bool,
+    /// Time of the last update and the end of the post-flight landing window (ms).
+    now: f64,
+    landing_until: f64,
 }
 
 impl Reflex {
     pub fn new(cfg: PolicyConfig) -> Self {
         let speed = cfg.initial_speed_bands_per_s;
-        Self { cfg, speed, recent: Default::default(), tracked: [None; 3] }
+        Self { cfg, speed, recent: Default::default(), tracked: [None; 3], was_flying: false, now: 0.0, landing_until: f64::NEG_INFINITY }
+    }
+
+    /// Within the landing window after a jetpack or pogo stick.
+    pub fn landing(&self) -> bool {
+        self.now < self.landing_until
     }
 
     pub fn speed(&self) -> f32 {
@@ -58,10 +72,18 @@ impl Reflex {
         self.speed = self.cfg.initial_speed_bands_per_s;
         self.recent.clear();
         self.tracked = [None; 3];
+        self.was_flying = false;
+        self.landing_until = f64::NEG_INFINITY;
     }
 
     /// Updates the speed estimate from obstacles moving one band closer between frames.
     pub fn update(&mut self, obs: &Observation, t_ms: f64) {
+        self.now = t_ms;
+        let flying = obs.state == GameState::Running && obs.flying();
+        if self.was_flying && !flying && obs.state == GameState::Running {
+            self.landing_until = t_ms + LANDING_MS;
+        }
+        self.was_flying = flying;
         if obs.state != GameState::Running {
             self.tracked = [None; 3];
             return;
@@ -100,9 +122,15 @@ impl Reflex {
             return true;
         }
         let Some(target) = action.target_lane(lane) else { return false };
+        // A jetpack or pogo stick keeps the runner above everything on the track.
+        if obs.flying() {
+            return true;
+        }
         let view = &obs.lanes[target.index()];
         let jumping = action == Action::Jump || obs.airborne;
         let rolling = action == Action::Roll || obs.rolling;
+        // Super sneakers jump high enough to land on top of a train.
+        let over_trains = jumping && obs.active_powerup == Some(PowerUp::SuperSneakers);
         let mut on_ramp = false;
         for (band, o) in view.bands().into_iter().enumerate() {
             let tti = self.tti_ms(band);
@@ -111,13 +139,17 @@ impl Reflex {
             }
             let barrier_later = tti > self.cfg.barrier_ms as f32;
             let ok = match o {
-                Obstacle::Free | Obstacle::Unknown => true,
+                // From a roof, a lane with no train or the roof's end is a drop to the track.
+                Obstacle::Free | Obstacle::Unknown | Obstacle::RoofEnd => true,
                 Obstacle::TrainRamp => {
                     on_ramp = true;
                     true
                 }
-                // Running up a ramp puts you on top of the train; anything else hits it.
-                Obstacle::TrainBody => on_ramp,
+                // Running up a ramp puts you on top of the train; anything else hits it. From a
+                // roof, a train body (above roof height) is a wall.
+                Obstacle::TrainBody => on_ramp || over_trains,
+                // A roof is walkable from a roof; from the ground it is the train under it.
+                Obstacle::TrainRoof => obs.on_roof() || on_ramp || over_trains,
                 // Only a jump clears a low barrier: rolling at one crashed 4 of 5 times in logged runs.
                 Obstacle::LowBarrier => barrier_later || jumping,
                 Obstacle::HighBarrier | Obstacle::OverheadBar => barrier_later || rolling,
@@ -134,7 +166,14 @@ impl Reflex {
     pub fn safety_mask(&self, obs: &Observation) -> ActionSet {
         let Some(lane) = obs.player_lane else { return [Action::Stay].into_iter().collect() };
         let window = self.cfg.lookahead_ms as f32;
-        let mask: ActionSet = possible_actions(obs).iter().filter(|a| self.survives(obs, lane, *a, window)).collect();
+        let mut mask: ActionSet = possible_actions(obs).iter().filter(|a| self.survives(obs, lane, *a, window)).collect();
+        // Just landed: no sidestepping into lanes perception has only just started reading.
+        if self.landing() {
+            let held: ActionSet = mask.iter().filter(|a| !matches!(a, Action::Left | Action::Right)).collect();
+            if !held.is_empty() {
+                mask = held;
+            }
+        }
         if mask.is_empty() { [Action::Hoverboard].into_iter().collect() } else { mask }
     }
 
@@ -174,7 +213,9 @@ impl Reflex {
             .filter_map(|a| {
                 let t = a.target_lane(lane)?;
                 let view = &obs.lanes[t.index()];
-                let clear = |o: Obstacle| matches!(o, Obstacle::Free | Obstacle::TrainRamp);
+                let clear = |o: Obstacle| {
+                    matches!(o, Obstacle::Free | Obstacle::TrainRamp | Obstacle::RoofEnd) || (o == Obstacle::TrainRoof && obs.on_roof())
+                };
                 Some((a, clear(view.near) as i32 * 2 + clear(view.mid) as i32 + view.coins as i32))
             })
             .collect();
@@ -186,15 +227,32 @@ impl Reflex {
     /// stay centred, and don't move without a reason.
     pub fn default_action(&self, obs: &Observation, mask: ActionSet) -> Action {
         let Some(lane) = obs.player_lane else { return Action::Stay };
+        // A train ahead in this lane, within the look-ahead: a ramp beside it is the way over.
+        let train_ahead = obs.lanes[lane.index()]
+            .bands()
+            .iter()
+            .position(|o| *o == Obstacle::TrainBody)
+            .is_some_and(|b| self.tti_ms(b) <= self.cfg.lookahead_ms as f32);
         let score = |a: Action| -> f32 {
             let Some(t) = a.target_lane(lane) else { return f32::NEG_INFINITY };
             let view: &LaneView = &obs.lanes[t.index()];
             let mut s = 0.0;
-            s += view.bands().iter().filter(|o| **o == Obstacle::Free).count() as f32 * 0.5;
+            s += if view.coins { 1.0 } else { 0.0 } + if view.powerup { self.cfg.powerup_weight } else { 0.0 };
+            s += if t == Lane::C { 0.2 } else { 0.0 };
+            if obs.flying() {
+                // Nothing on the track matters while flying: follow the coins.
+                return s + if a == Action::Stay { 0.5 } else if matches!(a, Action::Jump | Action::Roll) { -1.0 } else { 0.0 };
+            }
+            let walkable = |o: &Obstacle| *o == Obstacle::Free || (obs.on_roof() && *o == Obstacle::TrainRoof);
+            s += view.bands().iter().filter(|o| walkable(o)).count() as f32 * 0.5;
             s -= view.bands().iter().filter(|o| o.is_hazard()).count() as f32 * 0.4;
             s -= view.bands().iter().filter(|o| **o == Obstacle::Unknown).count() as f32 * 0.3;
-            s += if view.coins { 1.0 } else { 0.0 } + if view.powerup { 1.0 } else { 0.0 };
-            s += if t == Lane::C { 0.2 } else { 0.0 };
+            if obs.on_roof() && matches!(view.near, Obstacle::Free | Obstacle::RoofEnd) && t != lane {
+                s -= self.cfg.roof_drop_penalty;
+            }
+            if train_ahead && t != lane && (view.near == Obstacle::TrainRamp || view.mid == Obstacle::TrainRamp) {
+                s += RAMP_BONUS;
+            }
             s += match a {
                 Action::Stay => 0.5,
                 Action::Jump | Action::Roll => -1.0,
@@ -393,5 +451,124 @@ mod tests {
             r.update(&Observation::running(i as u64, Lane::C, lanes(view, FREE, FREE)), i as f64 * 150.0);
         }
         assert!(r.speed() > before);
+    }
+
+    // SPEC-roofs-and-powerups §4.4: one test per row of the roof and power-up tables.
+
+    fn on_roof(lanes: [LaneView; 3]) -> Observation {
+        Observation { level: crate::perception::Level::Roof, ..Observation::running(1, Lane::C, lanes) }
+    }
+
+    fn with_powerup(mut obs: Observation, p: PowerUp) -> Observation {
+        obs.active_powerup = Some(p);
+        obs
+    }
+
+    const ROOF: LaneView = LaneView { near: Obstacle::TrainRoof, mid: Obstacle::TrainRoof, far: Obstacle::TrainRoof, coins: false, powerup: false };
+
+    #[test]
+    fn roof_train_body_is_a_wall() {
+        let r = reflex();
+        let obs = on_roof(lanes(ROOF, LaneView { near: Obstacle::TrainBody, ..ROOF }, ROOF));
+        let mask = r.safety_mask(&obs);
+        assert!(!mask.contains(Action::Stay) && mask.contains(Action::Left) && mask.contains(Action::Right));
+    }
+
+    #[test]
+    fn roof_to_roof_step_is_safe() {
+        let r = reflex();
+        let obs = on_roof(lanes(ROOF, LaneView { mid: Obstacle::TrainBody, ..ROOF }, FREE));
+        assert!(r.safety_mask(&obs).contains(Action::Left));
+    }
+
+    #[test]
+    fn roof_end_is_a_safe_drop() {
+        let r = reflex();
+        let obs = on_roof(lanes(FREE, LaneView { near: Obstacle::RoofEnd, ..FREE }, FREE));
+        assert!(r.safety_mask(&obs).contains(Action::Stay));
+    }
+
+    #[test]
+    fn dropping_off_the_roofs_is_allowed_but_staying_up_is_preferred() {
+        let r = reflex();
+        let obs = on_roof(lanes(FREE, ROOF, ROOF));
+        let mask = r.safety_mask(&obs);
+        assert!(mask.contains(Action::Left), "a drop is safe");
+        // Left drops to the track, right steps to the next roof: right wins.
+        let wall = LaneView { near: Obstacle::TrainBody, ..ROOF };
+        let obs = on_roof(lanes(FREE, wall, ROOF));
+        assert_eq!(r.default_action(&obs, r.safety_mask(&obs)), Action::Right);
+    }
+
+    #[test]
+    fn roof_seen_from_the_ground_is_a_train() {
+        let r = reflex();
+        let obs = Observation::running(1, Lane::C, lanes(FREE, near(Obstacle::TrainRoof), FREE));
+        assert!(!r.safety_mask(&obs).contains(Action::Stay));
+    }
+
+    #[test]
+    fn ramp_beside_a_blocking_train_is_taken_on_purpose() {
+        let r = reflex();
+        let ramp = LaneView { near: Obstacle::TrainRamp, mid: Obstacle::TrainBody, ..FREE };
+        let obs = Observation::running(1, Lane::C, lanes(FREE, mid(Obstacle::TrainBody), ramp));
+        assert_eq!(r.default_action(&obs, r.safety_mask(&obs)), Action::Right);
+    }
+
+    #[test]
+    fn jetpack_ignores_the_track_and_follows_coins() {
+        let r = reflex();
+        let wall = LaneView { near: Obstacle::TrainBody, ..FREE };
+        let obs = with_powerup(Observation::running(1, Lane::C, lanes(wall, wall, LaneView { coins: true, ..wall })), PowerUp::Jetpack);
+        let mask = r.safety_mask(&obs);
+        assert!(mask.contains(Action::Stay) && mask.contains(Action::Left) && mask.contains(Action::Right));
+        assert!(!r.emergency(&obs));
+        assert_eq!(r.default_action(&obs, mask), Action::Right);
+        let pogo = with_powerup(Observation::running(1, Lane::C, lanes(wall, wall, wall)), PowerUp::PogoStick);
+        assert!(r.safety_mask(&pogo).contains(Action::Stay));
+    }
+
+    #[test]
+    fn landing_after_a_jetpack_holds_the_lane() {
+        let mut r = reflex();
+        let free = Observation::running(1, Lane::C, lanes(FREE, FREE, FREE));
+        r.update(&with_powerup(free.clone(), PowerUp::Jetpack), 1000.0);
+        r.update(&free, 1100.0);
+        let mask = r.safety_mask(&free);
+        assert!(!mask.contains(Action::Left) && !mask.contains(Action::Right) && mask.contains(Action::Stay));
+        // A second later the window is over.
+        r.update(&free, 2200.0);
+        assert!(r.safety_mask(&free).contains(Action::Left));
+        // Even while landing, a lane change stays allowed when it is the only way out.
+        let mut r = reflex();
+        r.update(&with_powerup(free.clone(), PowerUp::Jetpack), 1000.0);
+        let trapped = Observation::running(1, Lane::C, lanes(FREE, near(Obstacle::TrainBody), FREE));
+        r.update(&trapped, 1100.0);
+        assert!(r.safety_mask(&trapped).contains(Action::Left));
+    }
+
+    #[test]
+    fn super_sneakers_jump_onto_a_train() {
+        let r = reflex();
+        let obs = Observation::running(1, Lane::L, lanes(near(Obstacle::TrainBody), near(Obstacle::TrainBody), FREE));
+        assert!(!r.safety_mask(&obs).contains(Action::Jump));
+        assert!(r.safety_mask(&with_powerup(obs, PowerUp::SuperSneakers)).contains(Action::Jump));
+    }
+
+    #[test]
+    fn magnet_multiplier_and_hoverboard_change_no_rule() {
+        let r = reflex();
+        let obs = Observation::running(1, Lane::C, lanes(near(Obstacle::TrainBody), near(Obstacle::LowBarrier), FREE));
+        let plain: Vec<Action> = r.safety_mask(&obs).iter().collect();
+        for p in [PowerUp::Magnet, PowerUp::Multiplier, PowerUp::Hoverboard] {
+            assert_eq!(r.safety_mask(&with_powerup(obs.clone(), p)).iter().collect::<Vec<_>>(), plain, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn power_up_items_outweigh_coins() {
+        let r = reflex();
+        let obs = Observation::running(1, Lane::C, lanes(LaneView { coins: true, ..FREE }, mid(Obstacle::TrainBody), LaneView { powerup: true, ..FREE }));
+        assert_eq!(r.default_action(&obs, r.safety_mask(&obs)), Action::Right);
     }
 }

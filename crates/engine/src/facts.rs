@@ -2,7 +2,7 @@
 //! same situation always gives the same string, which is what makes the advisor cache work.
 //! Facts never say which move is best.
 
-use crate::perception::{Lane, LaneView, Obstacle, Observation};
+use crate::perception::{Lane, LaneView, Level, Obstacle, Observation};
 
 pub fn obstacle_phrase(o: Obstacle) -> &'static str {
     match o {
@@ -13,24 +13,36 @@ pub fn obstacle_phrase(o: Obstacle) -> &'static str {
         Obstacle::HighBarrier => "high barrier",
         Obstacle::OverheadBar => "overhead bar",
         Obstacle::Unknown => "unclear object",
+        Obstacle::TrainRoof => "train roof",
+        Obstacle::RoofEnd => "end of roof",
     }
+}
+
+/// `obstacle_phrase`, except that on a roof a lane with no train has no roof: a drop to the
+/// track, not "nothing". (Shorter than "drop to the track": the worst roof facts string with a
+/// power-up then stays within 60 OpenJev tokens.)
+pub fn obstacle_phrase_at(o: Obstacle, on_roof: bool) -> &'static str {
+    if on_roof && o == Obstacle::Free { "no roof" } else { obstacle_phrase(o) }
 }
 
 pub const BAND_PHRASES: [&str; 3] = ["close ahead", "at mid distance", "far ahead"];
 
-/// The first non-free band in a lane, as `(band, obstacle)`.
-pub fn first_obstacle(view: &LaneView) -> Option<(usize, Obstacle)> {
-    view.bands().into_iter().enumerate().find(|(_, o)| *o != Obstacle::Free)
+/// The first band in a lane the runner has to deal with, as `(band, obstacle)`: not free on the
+/// ground; on a roof, not the roof itself.
+pub fn first_obstacle(view: &LaneView, on_roof: bool) -> Option<(usize, Obstacle)> {
+    let walkable = |o: Obstacle| if on_roof { o == Obstacle::TrainRoof } else { o == Obstacle::Free };
+    view.bands().into_iter().enumerate().find(|(_, o)| !walkable(*o))
 }
 
-pub fn lane_phrase(view: &LaneView) -> String {
+pub fn lane_phrase(view: &LaneView, on_roof: bool) -> String {
     // A lane two away from the runner is off-screen (the camera follows the runner).
     if view.bands().iter().all(|o| *o == Obstacle::Unknown) && !view.coins && !view.powerup {
         return "not visible".into();
     }
-    let mut s = match first_obstacle(view) {
+    let mut s = match first_obstacle(view, on_roof) {
+        None if on_roof => "train roof".to_string(),
         None => "free".to_string(),
-        Some((band, o)) => format!("{} {}", obstacle_phrase(o), BAND_PHRASES[band]),
+        Some((band, o)) => format!("{} {}", obstacle_phrase_at(o, on_roof), BAND_PHRASES[band]),
     };
     if view.coins {
         s.push_str(", coins ahead");
@@ -49,17 +61,24 @@ fn capitalise(s: &str) -> String {
 /// `None` when the player's lane is unknown: the advisor is only asked about clear situations.
 pub fn facts(obs: &Observation) -> Option<String> {
     let lane = obs.player_lane?;
-    let posture = if obs.airborne {
+    let posture = if obs.airborne || obs.level == Level::Air {
         "in the air"
     } else if obs.rolling {
         "rolling"
+    } else if obs.on_roof() {
+        "on a train roof"
     } else {
         "on the ground"
     };
     let mut s = format!("Subway run. You are in the {lane} lane, {posture}.\n");
-    let parts: Vec<String> =
-        Lane::ALL.iter().map(|l| format!("{} lane: {}.", capitalise(l.name()), lane_phrase(&obs.lanes[l.index()]))).collect();
+    let parts: Vec<String> = Lane::ALL
+        .iter()
+        .map(|l| format!("{} lane: {}.", capitalise(l.name()), lane_phrase(&obs.lanes[l.index()], obs.on_roof())))
+        .collect();
     s.push_str(&parts.join(" "));
+    if let Some(p) = obs.active_powerup {
+        s.push_str(&format!(" Power-up: {}.", p.name()));
+    }
     Some(s)
 }
 
@@ -80,6 +99,22 @@ mod tests {
             facts(&obs).unwrap(),
             "Subway run. You are in the center lane, on the ground.\n\
              Left lane: train close ahead. Center lane: low barrier at mid distance. Right lane: free, coins ahead."
+        );
+    }
+
+    #[test]
+    fn roof_and_powerup_facts() {
+        let lanes = [
+            LaneView { near: Obstacle::TrainRoof, mid: Obstacle::RoofEnd, ..LaneView::FREE },
+            LaneView { near: Obstacle::TrainRoof, mid: Obstacle::TrainRoof, far: Obstacle::TrainRoof, ..LaneView::FREE },
+            LaneView::FREE,
+        ];
+        let obs = Observation { level: Level::Roof, active_powerup: Some(crate::perception::PowerUp::Jetpack), ..Observation::running(1, Lane::C, lanes) };
+        assert_eq!(
+            facts(&obs).unwrap(),
+            "Subway run. You are in the center lane, on a train roof.\n\
+             Left lane: end of roof at mid distance. Center lane: train roof. Right lane: no roof close ahead. \
+             Power-up: jetpack."
         );
     }
 

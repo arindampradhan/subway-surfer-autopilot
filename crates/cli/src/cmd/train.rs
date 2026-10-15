@@ -85,6 +85,28 @@ pub struct IlEvalArgs {
 }
 
 #[derive(Args)]
+pub struct LevelFramesArgs {
+    frames_dirs: Vec<PathBuf>,
+    #[arg(long, default_value = "labels")]
+    labels: PathBuf,
+    #[arg(long, default_value = "data/level_frames")]
+    out: PathBuf,
+    /// Side of the square network input (a multiple of 8).
+    #[arg(long, default_value_t = 64)]
+    size: usize,
+    /// Resize from the frame at its recorded resolution instead of the 320×180 work image.
+    #[arg(long)]
+    native: bool,
+}
+
+pub fn level_frames(cfg: &Config, args: LevelFramesArgs) -> Result<()> {
+    let LevelFramesArgs { frames_dirs, labels, out, size, native } = args;
+    let n = ssbot_lab::train::dump_level_frames(cfg, &frames_dirs, &labels, &out, size, native)?;
+    println!("{n} frames in {}", out.display());
+    Ok(())
+}
+
+#[derive(Args)]
 pub struct ZoneCropsArgs {
     frames_dirs: Vec<PathBuf>,
     #[arg(long, default_value = "labels")]

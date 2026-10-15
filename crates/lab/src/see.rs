@@ -22,6 +22,8 @@ fn colour(o: Obstacle) -> Rgb<u8> {
         Obstacle::HighBarrier => Rgb([255, 60, 255]),
         Obstacle::OverheadBar => Rgb([0, 230, 255]),
         Obstacle::Unknown => Rgb([150, 150, 150]),
+        Obstacle::TrainRoof => Rgb([40, 120, 255]),
+        Obstacle::RoofEnd => Rgb([255, 255, 255]),
     }
 }
 
@@ -34,6 +36,8 @@ fn letter(o: Obstacle) -> &'static str {
         Obstacle::HighBarrier => "H",
         Obstacle::OverheadBar => "O",
         Obstacle::Unknown => "U",
+        Obstacle::TrainRoof => "P",
+        Obstacle::RoofEnd => "E",
     }
 }
 

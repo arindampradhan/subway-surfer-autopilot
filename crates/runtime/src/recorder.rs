@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use image::RgbImage;
 use serde::{Deserialize, Serialize};
 
-use ssbot_engine::perception::{GameState, Observation};
+use ssbot_engine::perception::{GameState, Level, Observation, PowerUp};
 use ssbot_engine::policy::Action;
 use ssbot_engine::policy::advisor::{AdvisorPick, AdvisorStats};
 use ssbot_engine::policy::arbiter::{Chosen, Command};
@@ -65,6 +65,23 @@ pub struct Summary {
     pub reflex_p95_ms: f64,
     pub capture_p95_ms: Option<f64>,
     pub fps: f64,
+    /// Running time on train roofs (SPEC-roofs-and-powerups §4.6).
+    #[serde(default)]
+    pub roof_s: f64,
+    /// How the runner got onto a roof: `ramp`, `sneakers_jump` or `other`.
+    #[serde(default)]
+    pub roof_entries: std::collections::BTreeMap<String, u64>,
+    /// The runner's level when the run ended (`Ground`, `Roof`, `Air`).
+    #[serde(default)]
+    pub crash_level: Option<Level>,
+    /// Seconds each power-up was running, and how many times each started.
+    #[serde(default)]
+    pub powerup_s: std::collections::BTreeMap<String, f64>,
+    #[serde(default)]
+    pub powerups_started: std::collections::BTreeMap<String, u64>,
+    /// `none in stock`, `used` or `not tried` (the hoverboard probe, §4.4).
+    #[serde(default)]
+    pub hoverboard: Option<String>,
 }
 
 pub fn percentile(values: &mut [f64], p: f64) -> f64 {
@@ -103,7 +120,56 @@ pub fn crash_cause(events: &[EventLine], crash_t: f64) -> Option<String> {
         None => "; no action in the last 2 s".into(),
     };
     let no_escape = window.iter().any(|e| e.reflex.mask == vec![Action::Hoverboard]);
-    Some(format!("{seen}{act}{}", if no_escape { "; reflex saw no safe action" } else { "" }))
+    let level = match last.obs.level {
+        Level::Roof => ", on a roof",
+        Level::Air => ", in the air",
+        Level::Ground => "",
+    };
+    let powerup = last.obs.active_powerup.map(|p| format!(", with {}", p.name())).unwrap_or_default();
+    Some(format!("{seen}{level}{powerup}{act}{}", if no_escape { "; reflex saw no safe action" } else { "" }))
+}
+
+/// Roof time and entries, power-up time and starts, from consecutive running events.
+fn level_and_powerup_metrics(events: &[EventLine], s: &mut Summary) {
+    for (i, w) in events.windows(2).enumerate() {
+        let (a, b) = (&w[0].obs, &w[1].obs);
+        if a.state != GameState::Running {
+            continue;
+        }
+        let dt = (w[1].t - w[0].t) / 1000.0;
+        if a.level == Level::Roof {
+            s.roof_s += dt;
+        }
+        if let Some(p) = a.active_powerup {
+            *s.powerup_s.entry(p.name().to_string()).or_default() += dt;
+        }
+        if b.state == GameState::Running && b.level == Level::Roof && a.level != Level::Roof {
+            // A ramp in the runner's lane during the last 1.5 s, or a jump with sneakers on.
+            let recent = events[..=i + 1].iter().rev().take_while(|e| e.t >= w[1].t - 1500.0);
+            let mut ramp = false;
+            let mut sneakers = false;
+            for e in recent {
+                let lane = e.obs.player_lane.map(|l| e.obs.lanes[l.index()].bands());
+                ramp |= lane.is_some_and(|bands| bands.contains(&ssbot_engine::perception::Obstacle::TrainRamp));
+                sneakers |= e.obs.active_powerup == Some(PowerUp::SuperSneakers) && e.chosen.command == Command::Act(Action::Jump);
+            }
+            let how = if ramp { "ramp" } else if sneakers { "sneakers_jump" } else { "other" };
+            *s.roof_entries.entry(how.into()).or_default() += 1;
+        }
+        if b.state == GameState::Running && b.active_powerup.is_some() && b.active_powerup != a.active_powerup {
+            *s.powerups_started.entry(b.active_powerup.unwrap().name().to_string()).or_default() += 1;
+        }
+    }
+}
+
+/// What pressing Space found: the shop pausing the game within 2 s means none in stock.
+fn hoverboard_outcome(events: &[EventLine]) -> String {
+    let presses: Vec<f64> = events.iter().filter(|e| e.chosen.command == Command::Act(Action::Hoverboard)).map(|e| e.t).collect();
+    if presses.is_empty() {
+        return "not tried".into();
+    }
+    let shop = presses.iter().any(|&t| events.iter().any(|e| e.t > t && e.t <= t + 2000.0 && e.obs.state == GameState::Paused));
+    if shop { "none in stock" } else { "used" }.into()
 }
 
 /// Metrics from a run's events (SPEC §9). Survival counts only `Running` time, so ads are
@@ -124,7 +190,10 @@ pub fn summarise(events: &[EventLine], advisor: Option<AdvisorStats>) -> Summary
     if let Some(end) = first_run.and_then(|i| events[i..].iter().find(|e| ends_run(e.obs.state))) {
         s.crashed = true;
         s.crash_cause = crash_cause(events, end.t);
+        s.crash_level = events.iter().rev().filter(|e| e.t < end.t).find(|e| e.obs.state == GameState::Running).map(|e| e.obs.level);
     }
+    level_and_powerup_metrics(events, &mut s);
+    s.hoverboard = Some(hoverboard_outcome(events));
     for e in events {
         if let Command::Act(_) = e.chosen.command {
             s.actions += 1;
@@ -388,6 +457,30 @@ mod tests {
         let cause = s.crash_cause.unwrap();
         assert!(cause.starts_with("TrainBody at near in center lane"), "{cause}");
         assert!(s.reflex_p95_ms >= s.reflex_p50_ms);
+    }
+
+    #[test]
+    fn roof_powerup_and_hoverboard_metrics() {
+        let mut evs: Vec<EventLine> = (0..60).map(|i| ev(i, i as f64 * 100.0, GameState::Running, None)).collect();
+        // A ramp in the runner's lane, then 2 s on a roof with a magnet running.
+        evs[10].obs.lanes[1].near = Obstacle::TrainRamp;
+        for e in &mut evs[15..35] {
+            e.obs.level = Level::Roof;
+            e.obs.active_powerup = Some(PowerUp::Magnet);
+        }
+        evs[40].chosen.command = Command::Act(Action::Hoverboard);
+        evs[42].obs.state = GameState::Paused;
+        evs.push(ev(60, 6000.0, GameState::Crashed, None));
+        evs[59].obs.level = Level::Roof;
+        let s = summarise(&evs, None);
+        assert!((s.roof_s - 2.1).abs() < 1e-6, "{}", s.roof_s);
+        // The climb after the ramp, then a second entry (frame 59) with no ramp before it.
+        assert_eq!((s.roof_entries.get("ramp"), s.roof_entries.get("other")), (Some(&1), Some(&1)), "{:?}", s.roof_entries);
+        assert_eq!(s.powerups_started.get("coin magnet"), Some(&1));
+        assert!((s.powerup_s["coin magnet"] - 2.0).abs() < 1e-6);
+        assert_eq!(s.hoverboard.as_deref(), Some("none in stock"));
+        assert_eq!(s.crash_level, Some(Level::Roof));
+        assert!(s.crash_cause.unwrap().contains(", on a roof"));
     }
 
     #[test]

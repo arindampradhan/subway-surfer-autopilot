@@ -174,6 +174,9 @@ pub struct EvalReport {
     pub accuracy: f64,
     /// truth -> predicted -> count
     pub confusion: BTreeMap<String, BTreeMap<String, usize>>,
+    /// Correct and total sure zones by the labelled runner level (`unknown` for labels before
+    /// guide v2): the roof zones' accuracy (SPEC-roofs-and-powerups R2).
+    pub by_level: BTreeMap<String, (usize, usize)>,
     /// Zones labelled with a hazard (train body, barrier, overhead bar) that the model called free.
     pub missed_hazards: (usize, usize),
     /// Zones labelled free that the model called a hazard (these make the bot dodge for nothing).
@@ -195,7 +198,9 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
     let mut ok = 0;
     for f in frames.iter().filter(|f| f.label.game_state == GameState::Running) {
         let mut any = false;
-        let masks = calib.lanes.map(|lane| lane.bands().map(|q| q.mask(f.img.width(), f.img.height())));
+        // Roof frames are scored on the roof zone set, as the perceiver would cut them.
+        let level = f.label.level().unwrap_or(ssbot_engine::perception::Level::Ground);
+        let masks = calib.lanes_for(level).map(|lane| lane.bands().map(|q| q.mask(f.img.width(), f.img.height())));
         for (lane, lane_masks) in masks.iter().enumerate() {
             for (band, mask) in lane_masks.iter().enumerate() {
                 let Some(z) = f.label.zone(lane, band).filter(|z| z.sure) else { continue };
@@ -203,6 +208,9 @@ pub fn eval_zones(cfg: &Config, calib_path: &Path, model_path: &Path, frames_dir
                 let pred = model.predict(&f.img, mask, band);
                 r.zones += 1;
                 ok += (pred == z.obstacle) as usize;
+                let lv = r.by_level.entry(f.label.runner_level.clone()).or_default();
+                lv.0 += (pred == z.obstacle) as usize;
+                lv.1 += 1;
                 *r.confusion.entry(format!("{:?}", z.obstacle)).or_default().entry(format!("{pred:?}")).or_default() += 1;
                 if matches!(z.obstacle, Obstacle::LowBarrier | Obstacle::HighBarrier | Obstacle::OverheadBar) {
                     r.barrier_recall.1 += 1;
@@ -258,16 +266,43 @@ pub fn dump_zone_crops(cfg: &Config, calib_path: &Path, opts: ZoneCropsOpts) -> 
             // Native: crop from the frame as recorded (the live canvas, 640 wide) instead of the
             // small work image, so far barriers keep their detail.
             let img = if native { img } else { image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle) };
-            let masks = calib.lanes.map(|lane| lane.bands().map(|q| q.mask(img.width(), img.height())));
+            let level = label.level().unwrap_or(ssbot_engine::perception::Level::Ground);
+            let masks = calib.lanes_for(level).map(|lane| lane.bands().map(|q| q.mask(img.width(), img.height())));
             for (lane, lane_masks) in masks.iter().enumerate() {
                 for (band, mask) in lane_masks.iter().enumerate() {
                     let Some(z) = label.zone(lane, band).filter(|z| z.sure && z.obstacle != Obstacle::Unknown) else { continue };
                     let c = if band == 2 { ctx_far.unwrap_or(ctx) } else { ctx };
                     bin.write_all(&ssbot_engine::perception::cnn::zone_input(&img, mask, crop, c, dual))?;
-                    writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "lane": lane, "band": band, "class": format!("{:?}", z.obstacle)}))?;
+                    writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "lane": lane, "band": band, "class": format!("{:?}", z.obstacle), "level": format!("{level:?}")}))?;
                     n += 1;
                 }
             }
+        }
+    }
+    Ok(n)
+}
+
+/// Writes every labelled running frame with a known level as the level CNN's input, for
+/// `sidecar/level_cnn.py`: `frames.bin` (N × size × size × 3 bytes, from the same
+/// `level::frame_input` the perceiver uses) and `meta.jsonl` (set, frame id, level).
+pub fn dump_level_frames(cfg: &Config, frames_dirs: &[PathBuf], labels_dir: &Path, out: &Path, size: usize, native: bool) -> Result<usize> {
+    use std::io::Write;
+    let work = (cfg.capture.work_size[0], cfg.capture.work_size[1]);
+    std::fs::create_dir_all(out)?;
+    std::fs::write(out.join("frames.json"), serde_json::json!({"size": size, "native": native}).to_string())?;
+    let mut bin = std::io::BufWriter::new(std::fs::File::create(out.join("frames.bin"))?);
+    let mut meta = std::io::BufWriter::new(std::fs::File::create(out.join("meta.jsonl"))?);
+    let mut n = 0;
+    for dir in frames_dirs {
+        let set = run_name(dir);
+        let labels = load_final_labels(labels_dir, &set)?;
+        for (id, path) in list_frames(dir)? {
+            let Some(level) = labels.get(&id).filter(|l| l.game_state == GameState::Running).and_then(|l| l.level()) else { continue };
+            let img = image::open(&path).with_context(|| format!("opening {}", path.display()))?.to_rgb8();
+            let img = if native { img } else { image::imageops::resize(&img, work.0, work.1, image::imageops::FilterType::Triangle) };
+            bin.write_all(&ssbot_engine::perception::level::frame_input(&img, size))?;
+            writeln!(meta, "{}", serde_json::json!({"set": set, "id": id, "level": format!("{level:?}")}))?;
+            n += 1;
         }
     }
     Ok(n)
@@ -330,7 +365,8 @@ fn head_score(dir: &Path, baseline: bool) -> Option<(usize, usize)> {
     let (b_ok, b_n) = bench("test_bench")?;
     let (r_ok, r_n) = bench("test_real").unwrap_or((0, 0));
     let (o_ok, o_n) = bench("test_offscreen").unwrap_or((0, 0));
-    Some((b_ok + r_ok + o_ok, b_n + r_n + o_n))
+    let (p_ok, p_n) = bench("test_roof_powerup").unwrap_or((0, 0));
+    Some((b_ok + r_ok + o_ok + p_ok, b_n + r_n + o_n + p_n))
 }
 
 pub async fn train_by_human(cfg: &Config, calib_path: &Path, opts: &HumanOpts) -> Result<()> {
@@ -478,6 +514,7 @@ pub async fn train_by_human(cfg: &Config, calib_path: &Path, opts: &HumanOpts) -
         ("test_bench", &ds.test_bench),
         ("test_real", &ds.test_real),
         ("test_offscreen", &ds.test_offscreen),
+        ("test_roof_powerup", &ds.test_roof_powerup),
     ] {
         let text: String = recs.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
         std::fs::write(adv.join(format!("{split}.jsonl")), text)?;

@@ -14,19 +14,23 @@ subway_surfers_bot/
 │   │   └── src/            #   bot, browser, capture/, recorder, sidecar (process)
 │   ├── lab/                # ssbot-lab: offline tooling. May use reqwest, image_hasher, etc.
 │   │   ├── src/            #   label/, train, fit, il_data, advisor_bench, advisor_data,
-│   │   │                   #   bench, replay, see, calibrate, frames
+│   │   │                   #   bench, replay, see, calibrate, frames, mine (candidate frames)
 │   │   └── tests/          #   perception + replay tests, fixtures/
 │   └── cli/                # ssbot (bin `ssbot`): main.rs, cli.rs (clap), cmd/ handlers
-├── sidecar/                # Python (MLX): OpenJev sidecar + training scripts
+├── sidecar/                # Python (MLX): advisor sidecar (OpenJev, EmbeddingGemma, Clef Flash) + training
+│                           #   scripts; frame_search, hud_icons, mined_set, level_cnn, zone_cnn (offline)
 ├── scripts/improve.py      # Typer glue for the improvement loop
 ├── labels/                 # Claude labels (jsonl) + label_guide.md (labelling prompt)
-├── calibration/            # reference frames per screen
+├── calibration/            # reference frames per screen, HUD power-up icons (hud_<kind>_<n>.jpg)
 ├── models/                 # OpenJev heads; archive/ and candidate/ are gitignored
-├── data/                   # frames for labelling and training
+├── data/                   # frames for labelling and training; data/mined/ = mined candidates
+│                           #   and their embeddings (SPEC-roofs-and-powerups §4.1)
 ├── runs/                   # recorded runs and bench reports (gitignored)
-├── calibration.toml        # zones, markers, thresholds; points at zone_model.json
+├── calibration.toml        # zones (ground and roof), markers, HUD, thresholds; points at the
+│                           #   zone and level models
 ├── ssbot.toml              # settings (SPEC §11)
-└── zone_model.json         # live zone CNN
+├── zone_model.json         # live zone CNN
+└── level_model.json        # live level CNN (ground / roof / air)
 ```
 
 Build with `cargo build --release` at the root; the binary is `target/release/ssbot`.

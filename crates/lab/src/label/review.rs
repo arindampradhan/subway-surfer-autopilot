@@ -200,8 +200,10 @@ mod tests {
             game_state: GameState::Running,
             player_lane: "C".into(),
             player_action: "running".into(),
-            zones: all_zone_ids().into_iter().map(|z| ZoneLabel { zone: z, obstacle: Obstacle::Free, coins: false, powerup: false, sure: true }).collect(),
+            zones: all_zone_ids().into_iter().map(|z| ZoneLabel { zone: z, obstacle: Obstacle::Free, coins: false, powerup: false, sure: true, powerup_kind: "unknown".into() }).collect(),
             notes: "</script> attempt".into(),
+            runner_level: "ground".into(),
+            active_powerup: "none".into(),
         };
         let labels: HashMap<u64, FrameLabel> = [(1, label.clone()), (2, label)].into();
         let frames = vec![(1, "1.jpg".to_string()), (2, "2.jpg".to_string())];

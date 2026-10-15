@@ -231,6 +231,7 @@ pub fn frame_label(boxes: &[BoxN], calib: &Calibration, min_overlap: f32) -> Fra
                 coins,
                 powerup,
                 sure: best.is_some() || !grazed,
+                powerup_kind: "unknown".into(),
             });
         }
     }
@@ -244,7 +245,15 @@ pub fn frame_label(boxes: &[BoxN], calib: &Calibration, min_overlap: f32) -> Fra
         })
         .unwrap_or("unknown")
         .to_string();
-    FrameLabel { game_state: GameState::Running, player_lane, player_action: "unknown".into(), zones, notes: "imported boxes".into() }
+    FrameLabel {
+        game_state: GameState::Running,
+        player_lane,
+        player_action: "unknown".into(),
+        zones,
+        notes: "imported boxes".into(),
+        runner_level: "unknown".into(),
+        active_powerup: "unknown".into(),
+    }
 }
 
 #[cfg(test)]

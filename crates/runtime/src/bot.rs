@@ -120,7 +120,8 @@ pub async fn run(cfg: &Config, opts: &RunOpts) -> Result<Vec<Summary>> {
     let mut capture = start_capture(&game, cfg, opts.capture).await?;
     let mut perceiver = Perceiver::new(calib, &base, work);
     let mut reflex = Reflex::new(cfg.policy.clone());
-    let mut arbiter = Arbiter::new(cfg.policy.cooldown_ms, canvas_center).with_hoverboard(cfg.policy.use_hoverboard);
+    let mut arbiter = Arbiter::new(cfg.policy.cooldown_ms, canvas_center).with_hoverboard(cfg.policy.use_hoverboard)
+        .with_hoverboard_probe(cfg.policy.hoverboard_probe);
     let il_net = match &opts.il {
         Some((path, mode, threshold)) if !opts.human => {
             arbiter = arbiter.with_il(*mode, *threshold);
@@ -219,7 +220,13 @@ pub async fn run(cfg: &Config, opts: &RunOpts) -> Result<Vec<Summary>> {
                 Ok(()) => {
                     if let Command::Act(a) = chosen.command {
                         lanes.apply(a);
-                        motion.apply(a, t, cfg.policy.jump_ms as f64, cfg.policy.roll_ms as f64);
+                        // Super sneakers jump higher and further.
+                        let jump_ms = if obs.active_powerup == Some(ssbot_engine::perception::PowerUp::SuperSneakers) {
+                            cfg.policy.sneakers_jump_ms
+                        } else {
+                            cfg.policy.jump_ms
+                        };
+                        motion.apply(a, t, jump_ms as f64, cfg.policy.roll_ms as f64);
                     }
                 }
                 Err(err) => tracing::warn!("input failed: {err:#}"),

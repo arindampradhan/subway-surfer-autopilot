@@ -1,0 +1,77 @@
+{
+  "model": "embeddinggemma",
+  "train_situations": 2000,
+  "val_acc": 0.87,
+  "train": {
+    "zero_shot": [
+      0.2585,
+      517,
+      2000
+    ],
+    "trained_head": [
+      0.89,
+      1780,
+      2000
+    ],
+    "head_misses": []
+  },
+  "test_bench": {
+    "zero_shot": [
+      0.3333333333333333,
+      9,
+      27
+    ],
+    "trained_head": [
+      1.0,
+      27,
+      27
+    ],
+    "head_misses": []
+  },
+  "test_real": {
+    "zero_shot": [
+      0.15384615384615385,
+      10,
+      65
+    ],
+    "trained_head": [
+      0.9538461538461539,
+      62,
+      65
+    ],
+    "head_misses": [
+      "frame 894: picked stay, want ['right']",
+      "frame 4311: picked stay, want ['left']",
+      "frame 4857: picked stay, want ['left']"
+    ]
+  },
+  "test_offscreen": {
+    "zero_shot": [
+      0.31797235023041476,
+      69,
+      217
+    ],
+    "trained_head": [
+      0.8847926267281107,
+      192,
+      217
+    ],
+    "head_misses": [
+      "synthetic: picked right, want ['stay']",
+      "synthetic: picked left, want ['stay']",
+      "synthetic: picked stay, want ['right']",
+      "synthetic: picked roll, want ['left']",
+      "synthetic: picked right, want ['roll']",
+      "synthetic: picked right, want ['roll']",
+      "synthetic: picked left, want ['roll']",
+      "synthetic: picked left, want ['roll']",
+      "synthetic: picked left, want ['stay']",
+      "synthetic: picked stay, want ['right']",
+      "synthetic: picked stay, want ['left']",
+      "synthetic: picked stay, want ['left']",
+      "synthetic: picked stay, want ['right']",
+      "synthetic: picked stay, want ['left']",
+      "synthetic: picked left, want ['roll']"
+    ]
+  }
+}

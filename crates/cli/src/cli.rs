@@ -67,6 +67,13 @@ pub enum Cmd {
     /// Copy frames where the eyes report a barrier (from run folders or a bench report) into a
     /// folder for labelling: barriers are the scarce class.
     Mine(inspect::MineArgs),
+    /// Candidate frames for roofs, ramps, power-up timers and items (SPEC-roofs-and-powerups
+    /// §4.1 step 1): filters over runs' events and the HUD, near-duplicates dropped, JSON lines
+    /// for `sidecar/frame_search.py`.
+    MineCandidates(inspect::MineCandidatesArgs),
+    /// Write labelled frames with the runner's level (the level CNN's training data) for
+    /// `sidecar/level_cnn.py`.
+    LevelFrames(train::LevelFramesArgs),
     /// Write labelled zone crops (the CNN's training data) for `sidecar/zone_cnn.py`.
     ZoneCrops(train::ZoneCropsArgs),
     /// Fit classifier thresholds to Claude's labels and report held-out accuracy (M2).

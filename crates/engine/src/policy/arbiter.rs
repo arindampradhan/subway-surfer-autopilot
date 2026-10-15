@@ -52,6 +52,20 @@ pub struct Chosen {
     pub source: Source,
 }
 
+/// What the session knows about hoverboards in stock (SPEC-roofs-and-powerups §4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HoverboardStock {
+    #[default]
+    Unknown,
+    /// Space opened the shop dialog: none for the rest of the session.
+    Empty,
+    /// Space started a board without the shop appearing.
+    Available,
+}
+
+/// How long after Space the shop dialog has to appear to count as "none in stock".
+const SHOP_WINDOW: Duration = Duration::from_secs(2);
+
 pub struct Arbiter {
     cooldown: Duration,
     flow_interval: Duration,
@@ -61,6 +75,8 @@ pub struct Arbiter {
     last_hoverboard: Option<Instant>,
     hoverboard_cooldown: Duration,
     hoverboard_enabled: bool,
+    hoverboard_probe: bool,
+    pub stock: HoverboardStock,
     /// Last lane change and when, to stop immediate reversals.
     last_lane_change: Option<(Action, Instant)>,
     il: Option<(IlMode, f32)>,
@@ -81,6 +97,8 @@ impl Arbiter {
             // A hoverboard lasts several seconds and the supply is limited: one at a time.
             hoverboard_cooldown: Duration::from_secs(15),
             hoverboard_enabled: true,
+            hoverboard_probe: false,
+            stock: HoverboardStock::Unknown,
             last_lane_change: None,
             il: None,
             il_pick: None,
@@ -92,6 +110,37 @@ impl Arbiter {
     pub fn with_hoverboard(mut self, enabled: bool) -> Self {
         self.hoverboard_enabled = enabled;
         self
+    }
+
+    /// With the hoverboard otherwise off, still press Space when nothing else is safe until the
+    /// shop dialog shows there are none (`PolicyConfig::hoverboard_probe`).
+    pub fn with_hoverboard_probe(mut self, enabled: bool) -> Self {
+        self.hoverboard_probe = enabled;
+        self
+    }
+
+    fn hoverboard_allowed(&self) -> bool {
+        match self.stock {
+            HoverboardStock::Empty => false,
+            HoverboardStock::Available => self.hoverboard_enabled || self.hoverboard_probe,
+            HoverboardStock::Unknown => self.hoverboard_enabled || self.hoverboard_probe,
+        }
+    }
+
+    /// Learns the stock from what followed the last Space: the shop pausing the game, or a run
+    /// that kept going.
+    fn track_stock(&mut self, state: GameState, now: Instant) {
+        let Some(at) = self.last_hoverboard else { return };
+        if self.stock != HoverboardStock::Unknown {
+            return;
+        }
+        if now.duration_since(at) <= SHOP_WINDOW {
+            if state == GameState::Paused {
+                self.stock = HoverboardStock::Empty;
+            }
+        } else if state == GameState::Running {
+            self.stock = HoverboardStock::Available;
+        }
     }
 
     /// Let an imitation model drive: its pick (set each frame with `set_il_pick`) is used when it
@@ -133,6 +182,7 @@ impl Arbiter {
         advice: Option<&AdvisorPick>,
         now: Instant,
     ) -> Chosen {
+        self.track_stock(obs.state, now);
         if obs.state != GameState::Running {
             return self.flow(obs.state, marker_click, now);
         }
@@ -154,7 +204,7 @@ impl Arbiter {
         // Whatever chose it: no hoverboard when disabled or used recently. With none in stock,
         // Space opens a shop dialog that pauses the game (seen live twice).
         let recent = self.last_hoverboard.is_some_and(|t| now.duration_since(t) < self.hoverboard_cooldown);
-        if action == Action::Hoverboard && (recent || !self.hoverboard_enabled) {
+        if action == Action::Hoverboard && (recent || !self.hoverboard_allowed()) {
             action = reflex.fallback;
         }
         // The cooldown stops key spam, but a must-act dodge that differs from the last key (a jump
@@ -276,6 +326,31 @@ mod tests {
         let r = reflex(&[Action::Hoverboard], false, Action::Hoverboard);
         let c = a.decide(&running(), None, &r, None, t0).command;
         assert_eq!(c, Command::Act(Action::Jump));
+    }
+
+    #[test]
+    fn probe_presses_once_then_stops_when_the_shop_opens() {
+        let t0 = Instant::now();
+        let mut a = Arbiter::new(180, [0.5, 0.5]).with_hoverboard(false).with_hoverboard_probe(true);
+        let r = reflex(&[Action::Hoverboard], true, Action::Hoverboard);
+        assert_eq!(a.decide(&running(), None, &r, None, t0).command, Command::Act(Action::Hoverboard));
+        let mut paused = running();
+        paused.state = GameState::Paused;
+        a.decide(&paused, None, &r, None, t0 + Duration::from_millis(300));
+        assert_eq!(a.stock, HoverboardStock::Empty);
+        // Long after the cooldown, still no Space: none in stock.
+        let later = a.decide(&running(), None, &r, None, t0 + Duration::from_secs(60)).command;
+        assert_ne!(later, Command::Act(Action::Hoverboard));
+    }
+
+    #[test]
+    fn probe_learns_a_board_was_used_when_the_run_goes_on() {
+        let t0 = Instant::now();
+        let mut a = Arbiter::new(180, [0.5, 0.5]).with_hoverboard(false).with_hoverboard_probe(true);
+        let r = reflex(&[Action::Hoverboard], true, Action::Hoverboard);
+        a.decide(&running(), None, &r, None, t0);
+        a.decide(&running(), None, &reflex(&[Action::Stay], false, Action::Stay), None, t0 + Duration::from_secs(3));
+        assert_eq!(a.stock, HoverboardStock::Available);
     }
 
     #[test]

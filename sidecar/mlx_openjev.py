@@ -46,6 +46,12 @@ class MlxOpenJev:
         the latent `modeling_openjev.LatentMLPHead` is trained on."""
         return np.array(self._last(premise, hypotheses))
 
+    def zero_shot(self, latents: np.ndarray) -> np.ndarray:
+        """P(entailment) from latents, through the checkpoint's own NLI `score` head."""
+        logits = latents @ np.array(self.score).T
+        e = np.exp(logits - logits.max(1, keepdims=True))
+        return (e / e.sum(1, keepdims=True))[:, ENT]
+
     def _last(self, premise: str, hypotheses: list):
         """Final-norm hidden state at each input's last real token.
 

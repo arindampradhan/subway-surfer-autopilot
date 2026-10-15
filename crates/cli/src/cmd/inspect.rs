@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 
 use ssbot_engine::config::Config;
+use ssbot_engine::perception::Level;
 use ssbot_engine::perception::zones::Calibration;
 use ssbot_lab::{calibrate, frames, replay};
 
@@ -16,9 +17,20 @@ pub struct CalibrateArgs {
     preview: Option<PathBuf>,
     #[arg(long, default_value = "calibration/preview")]
     out: PathBuf,
+    /// With --preview: which zone set to draw, `ground` or `roof`.
+    #[arg(long, default_value = "ground", value_parser = parse_level)]
+    level: Level,
     /// Write the default (uncalibrated) calibration.toml and exit.
     #[arg(long)]
     init: bool,
+}
+
+fn parse_level(s: &str) -> Result<Level, String> {
+    match s {
+        "ground" => Ok(Level::Ground),
+        "roof" => Ok(Level::Roof),
+        _ => Err(format!("{s}: expected ground or roof")),
+    }
 }
 
 #[derive(Args)]
@@ -67,6 +79,29 @@ pub struct MineArgs {
     gap_ms: f64,
 }
 
+#[derive(Args)]
+pub struct MineCandidatesArgs {
+    /// Run folders, or folders of them (e.g. `runs`).
+    sources: Vec<PathBuf>,
+    #[arg(long, default_value = "data/mined/candidates.jsonl")]
+    out: PathBuf,
+    /// An airborne streak longer than this reads as a roof (a jump lasts `jump_ms`, 600 by default).
+    #[arg(long, default_value_t = 800.0)]
+    airborne_ms: f64,
+    /// Perceptual-hash distance at or under which a frame repeats the last kept one.
+    #[arg(long, default_value_t = 6)]
+    dup_bits: u32,
+    #[arg(long, default_value_t = 20_000)]
+    cap: usize,
+}
+
+pub fn mine_candidates(args: MineCandidatesArgs) -> Result<()> {
+    let MineCandidatesArgs { sources, out, airborne_ms, dup_bits, cap } = args;
+    let (read, skipped, n) = ssbot_lab::mine::mine_candidates(&sources, &out, airborne_ms, dup_bits, cap)?;
+    println!("{n} candidates from {read} runs ({skipped} unreadable) in {}", out.display());
+    Ok(())
+}
+
 pub async fn calibrate(cfg: &Config, calibration: &Path, args: CalibrateArgs) -> Result<()> {
     match args {
         CalibrateArgs { init: true, .. } => {
@@ -76,8 +111,8 @@ pub async fn calibrate(cfg: &Config, calibration: &Path, args: CalibrateArgs) ->
             Calibration::default().save(calibration)?;
             eprintln!("wrote {}", calibration.display());
         }
-        CalibrateArgs { preview: Some(dir), out, .. } => {
-            let written = calibrate::preview(&dir, calibration, &out, 20)?;
+        CalibrateArgs { preview: Some(dir), out, level, .. } => {
+            let written = calibrate::preview(&dir, calibration, &out, 20, level)?;
             eprintln!("wrote {} previews to {}", written.len(), out.display());
         }
         CalibrateArgs { preview: None, .. } => calibrate::capture(cfg, calibration).await?,

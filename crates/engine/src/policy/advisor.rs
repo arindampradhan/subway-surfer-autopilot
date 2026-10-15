@@ -9,8 +9,8 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 use super::{Action, possible_actions};
 use crate::config::{EffectStyle, Wording};
-use crate::facts::{BAND_PHRASES, first_obstacle, obstacle_phrase};
-use crate::perception::{LaneView, Obstacle, Observation};
+use crate::facts::{BAND_PHRASES, first_obstacle, obstacle_phrase_at};
+use crate::perception::{LaneView, Obstacle, Observation, PowerUp};
 use crate::sidecar::{Reply, Request, SidecarLink, WarmItem};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,13 +63,15 @@ pub struct Advisor {
     pub stats: AdvisorStats,
 }
 
-fn lane_description(view: &LaneView) -> String {
-    let mut s = match first_obstacle(view) {
+fn lane_description(view: &LaneView, on_roof: bool) -> String {
+    let first = first_obstacle(view, on_roof);
+    let mut s = match first {
+        None if on_roof => "a train roof".to_string(),
         None => "a free lane".to_string(),
-        Some((band, o)) => format!("a lane with {} {}", article(obstacle_phrase(o)), BAND_PHRASES[band]),
+        Some((band, o)) => format!("a lane with {} {}", article(obstacle_phrase_at(o, on_roof)), BAND_PHRASES[band]),
     };
     if view.coins {
-        s.push_str(if first_obstacle(view).is_none() { " with coins ahead" } else { " and coins ahead" });
+        s.push_str(if first.is_none() { " with coins ahead" } else { " and coins ahead" });
     }
     s
 }
@@ -101,16 +103,33 @@ pub fn effect(obs: &Observation, action: Action) -> String {
 
 pub fn effect_with(obs: &Observation, action: Action, style: EffectStyle) -> String {
     let Some(lane) = obs.player_lane else { return "has no known effect".into() };
+    let roof = obs.on_roof();
     let here = &obs.lanes[lane.index()];
-    let next_hazard = here.bands().into_iter().enumerate().find(|(_, o)| *o != Obstacle::Free);
-    let at = |band: usize, o: Obstacle| format!("the {} {}", obstacle_phrase(o), BAND_PHRASES[band]);
+    let next_hazard = first_obstacle(here, roof);
+    let at = |band: usize, o: Obstacle| format!("the {} {}", obstacle_phrase_at(o, roof), BAND_PHRASES[band]);
+    let sneakers = obs.active_powerup == Some(PowerUp::SuperSneakers);
+    if obs.flying() {
+        return match action {
+            Action::Left | Action::Right => match action.target_lane(lane) {
+                Some(t) if obs.lanes[t.index()].coins => "flies over a lane with coins ahead".into(),
+                Some(_) => "flies over another lane".into(),
+                None => "runs into the wall".into(),
+            },
+            Action::Stay => "keeps you flying above the track".into(),
+            _ => "does nothing while flying".into(),
+        };
+    }
     match (style, action) {
         (_, Action::Hoverboard) => "uses a hoverboard".into(),
         (_, Action::Left | Action::Right) => match action.target_lane(lane) {
-            Some(t) => format!("moves into {}", lane_description(&obs.lanes[t.index()])),
+            Some(t) if roof && matches!(obs.lanes[t.index()].near, Obstacle::Free | Obstacle::RoofEnd) => {
+                "drops to the track".into()
+            }
+            Some(t) if roof => format!("moves onto {}", lane_description(&obs.lanes[t.index()], roof)),
+            Some(t) => format!("moves into {}", lane_description(&obs.lanes[t.index()], roof)),
             None => "runs into the wall".into(),
         },
-        (EffectStyle::Position, Action::Stay) => format!("keeps you in {}", lane_description(here)),
+        (EffectStyle::Position, Action::Stay) => format!("keeps you in {}", lane_description(here, roof)),
         (EffectStyle::Position, Action::Jump) => match next_hazard {
             Some((band, o)) => format!("jumps toward {}", at(band, o)),
             None => "jumps while the lane ahead is free".into(),
@@ -121,12 +140,14 @@ pub fn effect_with(obs: &Observation, action: Action, style: EffectStyle) -> Str
         },
         (EffectStyle::Consequence, Action::Stay) => match next_hazard {
             Some((band, Obstacle::TrainRamp)) => format!("keeps you running up {}", at(band, Obstacle::TrainRamp)),
+            Some((band, o @ (Obstacle::RoofEnd | Obstacle::Free))) => format!("drops you to the track at {}", at(band, o)),
             Some((band, o)) => format!("keeps you running toward {}", at(band, o)),
-            None => format!("keeps you in {}", lane_description(here)),
+            None => format!("keeps you in {}", lane_description(here, roof)),
         },
         (EffectStyle::Consequence, Action::Jump) => match next_hazard {
             Some((band, o @ Obstacle::LowBarrier)) => format!("jumps over {}", at(band, o)),
             Some((band, o @ Obstacle::TrainRamp)) => format!("jumps onto {}", at(band, o)),
+            Some((band, o @ (Obstacle::TrainBody | Obstacle::TrainRoof))) if sneakers => format!("jumps onto {}", at(band, o)),
             Some((band, o)) => format!("jumps but cannot clear {}", at(band, o)),
             None => "jumps while the lane ahead is free".into(),
         },

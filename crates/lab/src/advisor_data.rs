@@ -6,6 +6,8 @@
 //! - test_bench: the hand-written benchmark cases (several answers may be acceptable).
 //! - test_real: situations from labelled gameplay frames (`labels/*.jsonl`), with the
 //!   correct move computed from the *labelled* scene, not from perception.
+//! - test_roof_powerup: the same, from labelled frames on a roof or with a power-up running
+//!   (SPEC-roofs-and-powerups §4.5), kept apart so the new cases are scored on their own.
 //!
 //! Any training situation whose facts string appears in a test set is dropped.
 
@@ -15,7 +17,7 @@ use serde::Serialize;
 
 use ssbot_engine::config::{PolicyConfig, Wording};
 use ssbot_engine::facts::facts;
-use ssbot_engine::perception::{GameState, Lane, LaneView, Obstacle, Observation};
+use ssbot_engine::perception::{GameState, Lane, LaneView, Level, Obstacle, Observation, PowerUp};
 use ssbot_engine::policy::Action;
 use ssbot_engine::policy::advisor::options_with;
 use ssbot_engine::policy::reflex::Reflex;
@@ -64,6 +66,22 @@ fn random_view(rng: &mut Rng) -> LaneView {
     LaneView { near, mid, far, coins: rng.next() < 0.3, powerup: rng.next() < 0.05 }
 }
 
+/// A lane seen from a roof: mostly roofs, roofs that end (and the drop after), the odd wall.
+fn random_roof_view(rng: &mut Rng) -> LaneView {
+    use Obstacle::*;
+    let dist = [(TrainRoof, 0.52), (RoofEnd, 0.12), (Free, 0.2), (TrainBody, 0.06), (OverheadBar, 0.05), (Unknown, 0.05)];
+    let mut bands = [rng.pick(&dist), rng.pick(&dist), rng.pick(&dist)];
+    // Past the end of a roof the lane is down on the track.
+    if let Some(end) = bands.iter().position(|o| *o == RoofEnd) {
+        for b in &mut bands[end + 1..] {
+            *b = Free;
+        }
+    }
+    LaneView { near: bands[0], mid: bands[1], far: bands[2], coins: rng.next() < 0.3, powerup: rng.next() < 0.05 }
+}
+
+const POWERUPS: [PowerUp; 6] = [PowerUp::Jetpack, PowerUp::SuperSneakers, PowerUp::PogoStick, PowerUp::Magnet, PowerUp::Multiplier, PowerUp::Hoverboard];
+
 fn record(obs: &Observation, best: Vec<Action>, wording: Wording, source: &str) -> Option<Record> {
     let options = options_with(obs, wording);
     let best: Vec<String> = best.into_iter().map(|a| a.key().to_string()).filter(|k| options.contains_key(k)).collect();
@@ -90,8 +108,10 @@ pub fn obs_from_label(id: u64, l: &FrameLabel) -> Option<Observation> {
         LaneView { near: z(0), mid: z(1), far: z(2), coins, powerup }
     });
     let mut obs = Observation::running(id, lane, lanes);
-    obs.airborne = l.player_action == "jumping";
+    obs.airborne = l.player_action == "jumping" || l.level() == Some(Level::Air);
     obs.rolling = l.player_action == "rolling";
+    obs.level = l.level().unwrap_or(if obs.airborne { Level::Air } else { Level::Ground });
+    obs.active_powerup = l.powerup().flatten();
     Some(obs)
 }
 
@@ -102,22 +122,23 @@ pub struct Datasets {
     /// Random situations with an off-screen lane (runner in an outer lane), drawn with a
     /// different seed and kept out of training.
     pub test_offscreen: Vec<Record>,
+    pub test_roof_powerup: Vec<Record>,
 }
 
 pub fn build(n_train: usize, seed: u64, wording: Wording, labelled: &[(u64, FrameLabel)]) -> Datasets {
     let reflex = Reflex::new(PolicyConfig::default());
     let test_bench: Vec<Record> = cases().iter().filter_map(|c| record(&c.obs, c.best.clone(), wording, &c.name)).collect();
     let mut seen_real = HashSet::new();
-    let test_real: Vec<Record> = labelled
-        .iter()
-        .filter_map(|(id, l)| obs_from_label(*id, l))
-        .filter_map(|obs| {
-            let action = reflex.evaluate(&obs).action;
-            record(&obs, vec![action], wording, &format!("frame {}", obs.frame_id))
-        })
-        .filter(|r| seen_real.insert(r.premise.clone()))
-        .collect();
-    let held: HashSet<String> = test_bench.iter().chain(&test_real).map(|r| r.premise.clone()).collect();
+    let (mut test_real, mut test_roof_powerup) = (Vec::new(), Vec::new());
+    for obs in labelled.iter().filter_map(|(id, l)| obs_from_label(*id, l)) {
+        let action = reflex.evaluate(&obs).action;
+        let Some(r) = record(&obs, vec![action], wording, &format!("frame {}", obs.frame_id)) else { continue };
+        if !seen_real.insert(r.premise.clone()) {
+            continue;
+        }
+        if obs.on_roof() || obs.active_powerup.is_some() { test_roof_powerup.push(r) } else { test_real.push(r) }
+    }
+    let held: HashSet<String> = test_bench.iter().chain(&test_real).chain(&test_roof_powerup).map(|r| r.premise.clone()).collect();
 
     let offscreen_test = random_records(400, seed.wrapping_mul(7919).wrapping_add(99), wording, &held)
         .into_iter()
@@ -126,7 +147,7 @@ pub fn build(n_train: usize, seed: u64, wording: Wording, labelled: &[(u64, Fram
     let mut held = held;
     held.extend(offscreen_test.iter().map(|r| r.premise.clone()));
     let train = random_records(n_train, seed, wording, &held);
-    Datasets { train, test_bench, test_real, test_offscreen: offscreen_test }
+    Datasets { train, test_bench, test_real, test_offscreen: offscreen_test, test_roof_powerup }
 }
 
 fn random_records(n_train: usize, seed: u64, wording: Wording, held: &HashSet<String>) -> Vec<Record> {
@@ -138,15 +159,29 @@ fn random_records(n_train: usize, seed: u64, wording: Wording, held: &HashSet<St
     while train.len() < n_train && tries < n_train * 50 {
         tries += 1;
         let lane = Lane::ALL[(rng.next() * 3.0) as usize % 3];
-        let mut views = [random_view(&mut rng), random_view(&mut rng), random_view(&mut rng)];
+        let level = rng.pick(&[(Level::Ground, 0.70), (Level::Roof, 0.25), (Level::Air, 0.05)]);
+        let mut views = if level == Level::Roof {
+            let mut v = [random_roof_view(&mut rng), random_roof_view(&mut rng), random_roof_view(&mut rng)];
+            // The runner stands on a roof: its own lane starts with roof most of the time.
+            if rng.next() < 0.8 {
+                v[lane.index()].near = Obstacle::TrainRoof;
+            }
+            v
+        } else {
+            [random_view(&mut rng), random_view(&mut rng), random_view(&mut rng)]
+        };
         // Live, the lane two away from an outer-lane runner is off-screen (all Unknown).
         if lane != Lane::C && rng.next() < 0.8 {
             let far = if lane == Lane::L { 2 } else { 0 };
             views[far] = LaneView { near: Obstacle::Unknown, mid: Obstacle::Unknown, far: Obstacle::Unknown, coins: false, powerup: false };
         }
         let mut obs = Observation::running(0, lane, views);
-        obs.airborne = rng.next() < 0.1;
+        obs.level = level;
+        obs.airborne = level == Level::Air || (level == Level::Ground && rng.next() < 0.1);
         obs.rolling = !obs.airborne && rng.next() < 0.1;
+        if rng.next() < 0.2 {
+            obs.active_powerup = Some(POWERUPS[(rng.next() * POWERUPS.len() as f64) as usize % POWERUPS.len()]);
+        }
         let out = reflex.evaluate(&obs);
         if out.action == Action::Hoverboard {
             continue; // no safe ordinary move: nothing for the advisor to learn
@@ -179,5 +214,9 @@ mod tests {
         assert!(moves > 50, "{moves}");
         let off_screen = d.train.iter().filter(|r| r.premise.contains("not visible")).count();
         assert!(off_screen > 50, "{off_screen} situations with an off-screen lane");
+        // Roofs and power-ups are in the training data (SPEC-roofs-and-powerups §4.5).
+        let roof = d.train.iter().filter(|r| r.premise.contains("on a train roof")).count();
+        let powered = d.train.iter().filter(|r| r.premise.contains("Power-up:")).count();
+        assert!(roof > 40 && powered > 30, "{roof} roof, {powered} power-up situations");
     }
 }

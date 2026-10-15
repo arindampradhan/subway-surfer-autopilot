@@ -2,6 +2,8 @@
 
 pub mod classify;
 pub mod cnn;
+pub mod hud;
+pub mod level;
 pub mod model;
 pub mod state;
 pub mod zones;
@@ -56,10 +58,14 @@ pub enum Obstacle {
     HighBarrier,
     OverheadBar,
     Unknown,
+    /// A walkable train roof at the runner's height (roof zone set only).
+    TrainRoof,
+    /// The roof the runner is on ends here; the lane drops to the track (roof zone set only).
+    RoofEnd,
 }
 
 impl Obstacle {
-    pub const ALL: [Obstacle; 7] = [
+    pub const ALL: [Obstacle; 9] = [
         Self::Free,
         Self::TrainBody,
         Self::TrainRamp,
@@ -67,11 +73,62 @@ impl Obstacle {
         Self::HighBarrier,
         Self::OverheadBar,
         Self::Unknown,
+        Self::TrainRoof,
+        Self::RoofEnd,
     ];
 
     /// Something you crash into if you run into it without the right move.
     pub fn is_hazard(self) -> bool {
         matches!(self, Self::TrainBody | Self::LowBarrier | Self::HighBarrier | Self::OverheadBar)
+    }
+}
+
+/// Where the runner is, vertically. On a roof the camera rises and the ground zones look at roofs
+/// and buildings, so perception switches to the roof zone set.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Level {
+    #[default]
+    Ground,
+    Roof,
+    Air,
+}
+
+impl Level {
+    pub const ALL: [Level; 3] = [Self::Ground, Self::Roof, Self::Air];
+}
+
+/// The power-up whose timer shows in the bottom-left HUD. `Other` means the timer is showing but
+/// the icon matches no reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PowerUp {
+    Jetpack,
+    SuperSneakers,
+    PogoStick,
+    Magnet,
+    Multiplier,
+    Hoverboard,
+    Other,
+}
+
+impl PowerUp {
+    pub const ALL: [PowerUp; 7] =
+        [Self::Jetpack, Self::SuperSneakers, Self::PogoStick, Self::Magnet, Self::Multiplier, Self::Hoverboard, Self::Other];
+
+    /// Lifts the runner off the track: nothing on it can be hit.
+    pub fn flies(self) -> bool {
+        matches!(self, Self::Jetpack | Self::PogoStick)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Jetpack => "jetpack",
+            Self::SuperSneakers => "super sneakers",
+            Self::PogoStick => "pogo stick",
+            Self::Magnet => "coin magnet",
+            Self::Multiplier => "score multiplier",
+            Self::Hoverboard => "hoverboard",
+            Self::Other => "unrecognised",
+        }
     }
 }
 
@@ -131,10 +188,16 @@ pub struct Observation {
     pub frame_id: u64,
     pub state: GameState,
     pub player_lane: Option<Lane>,
+    /// `level == Air`, or a jump the sprite shows; kept for runs recorded before `level`.
     pub airborne: bool,
     pub rolling: bool,
     pub lanes: [LaneView; 3],
     pub confidence: f32,
+    /// Runs recorded before this field read as `Ground`.
+    #[serde(default)]
+    pub level: Level,
+    #[serde(default)]
+    pub active_powerup: Option<PowerUp>,
 }
 
 impl Observation {
@@ -147,7 +210,18 @@ impl Observation {
             rolling: false,
             lanes,
             confidence: 1.0,
+            level: Level::Ground,
+            active_powerup: None,
         }
+    }
+
+    pub fn on_roof(&self) -> bool {
+        self.level == Level::Roof
+    }
+
+    /// Jetpack or pogo stick: the runner is out of reach of anything on the track.
+    pub fn flying(&self) -> bool {
+        self.active_powerup.is_some_and(PowerUp::flies)
     }
 }
 
@@ -172,12 +246,16 @@ pub struct Measured {
     pub marker_click: Option<[f32; 2]>,
 }
 
-/// Zone masks `[lane][band]` together with the frame size they were built for.
-type SizedMasks = ((u32, u32), [[ZoneMask; 3]; 3]);
+/// Zone masks `[lane][band]` together with the frame size and zone set (roof or not) they were
+/// built for.
+type SizedMasks = ((u32, u32, bool), [[ZoneMask; 3]; 3]);
 
 pub struct Perceiver {
     pub calib: Calibration,
     model: Option<cnn::Classifier>,
+    level_model: Option<level::LevelCnn>,
+    levels: level::LevelTracker,
+    hud: hud::Hud,
     templates: Vec<MarkerTemplate>,
     masks: Option<SizedMasks>,
     /// Zone masks for the full-resolution frame, for models trained on native crops.
@@ -186,6 +264,11 @@ pub struct Perceiver {
     detector: StateDetector,
     /// Last few raw zone classes, for a per-zone majority vote that stops one-frame flicker.
     history: std::collections::VecDeque<[[Obstacle; 3]; 3]>,
+    /// Last few HUD reads, for the same vote.
+    hud_history: std::collections::VecDeque<Option<PowerUp>>,
+    /// Whether the last frame used the roof zone set, and frames left before roof zones are trusted.
+    roof_zones: bool,
+    settle: u32,
 }
 
 /// Majority vote over recent frames for each zone; ties go to the newest frame.
@@ -205,6 +288,13 @@ fn vote(history: &std::collections::VecDeque<[[Obstacle; 3]; 3]>) -> [[Obstacle;
     })
 }
 
+/// Majority vote over recent HUD reads; ties go to the newest.
+fn vote_hud(history: &std::collections::VecDeque<Option<PowerUp>>) -> Option<PowerUp> {
+    let newest = *history.back().expect("non-empty");
+    let count = |v: Option<PowerUp>| history.iter().filter(|h| **h == v).count();
+    history.iter().copied().fold(newest, |best, v| if count(v) > count(best) { v } else { best })
+}
+
 impl Perceiver {
     /// `base`: directory marker reference paths are relative to; `work`: working frame size.
     pub fn new(calib: Calibration, base: &Path, work: (u32, u32)) -> Self {
@@ -216,22 +306,41 @@ impl Perceiver {
                 None
             }
         });
+        let level_model = calib.level_model.as_ref().and_then(|m| match level::LevelCnn::load(&base.join(m)) {
+            Ok(m) => Some(m),
+            Err(err) => {
+                tracing::warn!("level model: {err:#}; reading only ground and air from the sprite");
+                None
+            }
+        });
+        let hud = hud::Hud::new(calib.hud.clone(), base);
         Self {
             calib,
             model,
+            level_model,
+            levels: Default::default(),
+            hud,
             templates,
             masks: None,
             hires_masks: None,
             prev: None,
             detector: StateDetector::default(),
             history: Default::default(),
+            hud_history: Default::default(),
+            roof_zones: false,
+            settle: 0,
         }
     }
 
+    fn zone_set(&self, roof: bool) -> [zones::LaneZones; 3] {
+        self.calib.lanes_for(if roof { Level::Roof } else { Level::Ground })
+    }
+
     fn masks(&mut self, w: u32, h: u32) -> &[[ZoneMask; 3]; 3] {
-        if self.masks.as_ref().map(|(size, _)| *size) != Some((w, h)) {
-            let m = self.calib.lanes.map(|lane| lane.bands().map(|q| q.mask(w, h)));
-            self.masks = Some(((w, h), m));
+        let key = (w, h, self.roof_zones);
+        if self.masks.as_ref().map(|(k, _)| *k) != Some(key) {
+            let m = self.zone_set(self.roof_zones).map(|lane| lane.bands().map(|q| q.mask(w, h)));
+            self.masks = Some((key, m));
         }
         &self.masks.as_ref().unwrap().1
     }
@@ -253,6 +362,25 @@ impl Perceiver {
     /// `hires`: the same frame at full resolution, used by zone models trained on native crops.
     pub fn measure_with(&mut self, frame_id: u64, img: &RgbImage, hires: Option<&RgbImage>) -> Measured {
         let th = self.calib.thresholds;
+        // Level first: it picks the zone set.
+        let player = self.player(img);
+        let raw_level = match &self.level_model {
+            Some(m) => m.predict(hires.filter(|_| m.hires).unwrap_or(img)).0,
+            None if player.is_some_and(|p| p.airborne) => Level::Air,
+            None => Level::Ground,
+        };
+        let level = self.levels.update(raw_level);
+        let roof = level == Level::Roof && self.calib.roof_lanes.is_some();
+        if roof != self.roof_zones {
+            // Classes from the other zone set mustn't vote with these.
+            self.history.clear();
+            self.roof_zones = roof;
+            // Blank the zones only while switching to a roof set with other geometry: with the
+            // same quads (as calibrated in 2026-10) the classes stay comparable, and Unknown
+            // zones would let the reflex walk into whatever they hide.
+            let moved = self.calib.roof_lanes.is_some_and(|r| r != self.calib.lanes);
+            self.settle = if roof && moved { th.roof_settle_frames } else { 0 };
+        }
         let masks = self.masks(img.width(), img.height()).clone();
         let prev = self.prev.as_ref();
         let zones = [0, 1, 2].map(|l| [0, 1, 2].map(|b| zone_features(img, prev, &masks[l][b], &th)));
@@ -261,10 +389,10 @@ impl Perceiver {
         // A model trained on full-resolution crops looks at the full-resolution frame.
         let hires_img = hires.filter(|_| self.model.as_ref().is_some_and(|m| m.hires()));
         if let Some(h) = hires_img {
-            let size = (h.width(), h.height());
-            if self.hires_masks.as_ref().map(|(sz, _)| *sz) != Some(size) {
-                let m = self.calib.lanes.map(|lane| lane.bands().map(|q| q.mask(size.0, size.1)));
-                self.hires_masks = Some((size, m));
+            let key = (h.width(), h.height(), self.roof_zones);
+            if self.hires_masks.as_ref().map(|(k, _)| *k) != Some(key) {
+                let m = self.zone_set(self.roof_zones).map(|lane| lane.bands().map(|q| q.mask(key.0, key.1)));
+                self.hires_masks = Some((key, m));
             }
         }
         let classes = match &self.model {
@@ -274,11 +402,19 @@ impl Perceiver {
             },
             None => zones.map(|lane| lane.map(|f| classify_zone(&f, &th))),
         };
+        // Track is visible when most zones read as something the classifier knows (before the
+        // roof settle period blanks them, so state detection doesn't flicker on a climb).
+        let known = classes.iter().flatten().filter(|c| **c != Obstacle::Unknown).count();
         self.history.push_back(classes);
         if self.history.len() > 3 {
             self.history.pop_front();
         }
-        let classes = vote(&self.history);
+        let classes = if self.settle > 0 {
+            self.settle -= 1;
+            [[Obstacle::Unknown; 3]; 3]
+        } else {
+            vote(&self.history)
+        };
         let lanes = [0, 1, 2].map(|l| LaneView {
             near: classes[l][0],
             mid: classes[l][1],
@@ -286,23 +422,37 @@ impl Perceiver {
             coins: zones[l].iter().any(|f| f.coin >= th.coin_frac_min),
             powerup: zones[l].iter().any(|f| f.powerup >= th.powerup_frac_min),
         });
-        let known = classes.iter().flatten().filter(|c| **c != Obstacle::Unknown).count();
-        // Track is visible when most zones read as something the classifier knows.
         let track_visible = known >= 6;
         let state = self.detector.detect(img, stats, &self.templates, track_visible, &th);
         let marker_click = state::match_marker(img, &self.templates).and_then(|t| t.marker.click);
-        let player = self.player(img);
+        // The timer's thin bar and small icon read best at full resolution.
+        self.hud_history.push_back(self.hud.detect(hires.unwrap_or(img)));
+        if self.hud_history.len() > 3 {
+            self.hud_history.pop_front();
+        }
+        let active_powerup = vote_hud(&self.hud_history);
         self.prev = Some(img.clone());
 
         let running = state == GameState::Running;
+        if !running {
+            self.levels.reset();
+        }
+        // The sprite sits high on a roof, so its "airborne" read is only trusted on the ground.
+        let airborne = running && (level == Level::Air || (level == Level::Ground && player.is_some_and(|p| p.airborne)));
         let obs = Observation {
             frame_id,
             state,
             player_lane: player.map(|p| p.lane),
-            airborne: running && player.is_some_and(|p| p.airborne),
+            airborne,
             rolling: running && player.is_some_and(|p| p.rolling),
             lanes,
             confidence: known as f32 / 9.0 * if player.is_some() { 1.0 } else { 0.5 },
+            level: match (running, level) {
+                (false, _) => Level::Ground,
+                (true, Level::Ground) if airborne => Level::Air,
+                (true, l) => l,
+            },
+            active_powerup: if running { active_powerup } else { None },
         };
         Measured { obs, zones, stats, marker_click }
     }
@@ -374,6 +524,64 @@ pub(crate) mod tests {
             }
         }
         img
+    }
+
+    fn roof_perceiver(roof_lanes: [zones::LaneZones; 3]) -> Perceiver {
+        let calib = Calibration { roof_lanes: Some(roof_lanes), ..Calibration::default() };
+        let mut p = Perceiver::new(calib, Path::new("."), (320, 180));
+        p.level_model = Some(level::LevelCnn::constant(Level::Roof));
+        p
+    }
+
+    #[test]
+    fn roof_level_needs_three_frames_and_same_geometry_keeps_the_zones() {
+        let calib = Calibration::default();
+        let mut p = roof_perceiver(calib.lanes);
+        let img = synthetic(&calib, &[(0, 0, Rgb([30, 60, 200]))]);
+        let levels: Vec<Level> = (0..4).map(|i| p.perceive(i, &img).level).collect();
+        assert_eq!(levels, [Level::Ground, Level::Ground, Level::Roof, Level::Roof]);
+        // The roof set has the ground geometry: no blanking, the train stays visible.
+        assert_eq!(p.perceive(5, &img).lanes[0].near, Obstacle::TrainBody);
+    }
+
+    #[test]
+    fn moved_roof_zones_read_unknown_while_the_camera_settles() {
+        let calib = Calibration::default();
+        let mut shifted = calib.lanes;
+        for lane in &mut shifted {
+            for q in [&mut lane.near, &mut lane.mid, &mut lane.far] {
+                for c in &mut q.0 {
+                    c[1] -= 0.02;
+                }
+            }
+        }
+        let mut p = roof_perceiver(shifted);
+        // Alternate the track shade: identical frames would read as a frozen (crashed) screen.
+        let frames = [synthetic(&calib, &[]), RgbImage::from_pixel(320, 180, Rgb([122, 104, 98]))];
+        let obs: Vec<Observation> = (0..30).map(|i| p.perceive(i, &frames[i as usize % 2])).collect();
+        assert!(obs.iter().all(|o| o.state == GameState::Running));
+        // On the roof from the third frame: then 18 frames of Unknown, then the roof zones.
+        assert!(obs[2..20].iter().all(|o| o.lanes.iter().all(|l| l.near == Obstacle::Unknown)));
+        assert!(obs[25].lanes.iter().all(|l| l.near != Obstacle::Unknown));
+    }
+
+    #[test]
+    fn hud_timer_reaches_the_observation() {
+        let calib = Calibration::default();
+        let mut p = Perceiver::new(calib.clone(), Path::new("."), (320, 180));
+        let mut img = synthetic(&calib, &[]);
+        let paint = |img: &mut RgbImage, r: zones::Rect, c: Rgb<u8>| {
+            let (x0, y0, x1, y1) = r.pixels(320, 180);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    img.put_pixel(x, y, c);
+                }
+            }
+        };
+        paint(&mut img, calib.hud.bar, Rgb([245, 245, 245]));
+        paint(&mut img, calib.hud.icon, Rgb([40, 120, 230]));
+        let reads: Vec<Option<PowerUp>> = (0..3).map(|i| p.perceive(i, &img).active_powerup).collect();
+        assert_eq!(reads.last().copied().flatten(), Some(PowerUp::Other), "{reads:?}");
     }
 
     #[test]

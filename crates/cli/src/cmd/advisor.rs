@@ -54,7 +54,7 @@ pub fn advisor_data(cfg: &Config, args: AdvisorDataArgs) -> Result<()> {
     labelled.sort_by_key(|(id, _)| *id);
     let ds = ssbot_lab::advisor_data::build(n, seed, cfg.advisor.wording, &labelled);
     std::fs::create_dir_all(&out)?;
-    for (name, recs) in [("train", &ds.train), ("test_bench", &ds.test_bench), ("test_real", &ds.test_real), ("test_offscreen", &ds.test_offscreen)] {
+    for (name, recs) in [("train", &ds.train), ("test_bench", &ds.test_bench), ("test_real", &ds.test_real), ("test_offscreen", &ds.test_offscreen), ("test_roof_powerup", &ds.test_roof_powerup)] {
         let text: String = recs.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
         std::fs::write(out.join(format!("{name}.jsonl")), text)?;
         eprintln!("{name}: {} records", recs.len());

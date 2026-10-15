@@ -29,7 +29,9 @@ class OPTS:
     width = 1.0
     free_bias = 0.0
     pos = False
-CLASSES = ["Free", "TrainBody", "TrainRamp", "LowBarrier", "HighBarrier", "OverheadBar"]
+# TrainRoof and RoofEnd only come from roof frames (SPEC-roofs-and-powerups §4.2); appended, so the
+# ground classes keep their indices.
+CLASSES = ["Free", "TrainBody", "TrainRamp", "LowBarrier", "HighBarrier", "OverheadBar", "TrainRoof", "RoofEnd"]
 HAZARD = {"TrainBody", "LowBarrier", "HighBarrier", "OverheadBar"}
 SIZE = 32
 # Recordings whose frames don't line up with the zones (cyan border: the game didn't fill the

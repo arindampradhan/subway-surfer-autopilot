@@ -11,7 +11,11 @@ card adapts OpenJev to a decision task. Data comes from `ssbot advisor-data`:
 Reports zero-shot accuracy (OpenJev's own P(entailment), what the sidecar used before) and
 the trained head's accuracy on each split, then saves the head for `openjev_sidecar.py --head`.
 
+`--model embeddinggemma` trains the same head on EmbeddingGemma 2 features instead
+(`embeddinggemma.py`); its zero-shot baseline is premise-option cosine similarity.
+
   ../.venv/bin/python sidecar/train_head.py --data data/advisor --out models/head-0.8b
+  ../.venv/bin/python sidecar/train_head.py --model embeddinggemma --out models/head-embeddinggemma
 """
 
 import argparse
@@ -27,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np  # noqa: E402
 
-from openjev_sidecar import MODELS, REPO  # noqa: E402
+from openjev_sidecar import MODELS, encoder  # noqa: E402
 
 
 def load(path):
@@ -89,18 +93,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/advisor")
     ap.add_argument("--out", default="models/head-0.8b")
-    ap.add_argument("--model", choices=MODELS, default="0.8b")
+    ap.add_argument("--model", choices=[*MODELS, "embeddinggemma"], default="0.8b")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--baseline", default="", help="current head to score on the same test sets")
     args = ap.parse_args()
 
-    from mlx_openjev import ENT, MlxOpenJev
     from modeling_openjev import LatentMLPHead
 
-    ce = MlxOpenJev(REPO, MODELS[args.model])
-    score_w = np.array(ce.score)  # (3, hidden): OpenJev's own NLI head, for the zero-shot baseline
+    ce = encoder(args.model)
     splits = {}
-    for name in ["train", "test_bench", "test_real", "test_offscreen"]:
+    for name in ["train", "test_bench", "test_real", "test_offscreen", "test_roof_powerup"]:
         path = os.path.join(args.data, f"{name}.jsonl")
         if not os.path.exists(path):
             continue
@@ -109,11 +111,6 @@ def main():
         X, gold, qid, keys = featurize(ce, recs, os.path.join(args.data, f"latents_{args.model}_{name}.npz"))
         splits[name] = (recs, X, gold, qid, keys)
 
-    def zero_shot(X):
-        logits = X @ score_w.T
-        e = np.exp(logits - logits.max(1, keepdims=True))
-        return (e / e.sum(1, keepdims=True))[:, ENT]
-
     _, Xtr, gtr, qtr, _ = splits["train"]
     head = LatentMLPHead(d=Xtr.shape[1], seed=args.seed, device="cpu", epochs=200, patience=20)
     head.fit(Xtr, gtr, qtr, val_frac=0.15)
@@ -121,7 +118,7 @@ def main():
 
     report = {"model": args.model, "train_situations": len(splits["train"][0]), "val_acc": head.val_acc}
     for name, (recs, X, gold, qid, keys) in splits.items():
-        zs, trained = zero_shot(X), head.predict(X)
+        zs, trained = ce.zero_shot(X), head.predict(X)
         report[name] = {
             "zero_shot": accuracy(zs, gold, qid),
             "trained_head": accuracy(trained, gold, qid),
@@ -129,6 +126,11 @@ def main():
         }
     if args.baseline and os.path.exists(os.path.join(args.baseline, "head.pt")):
         base = LatentMLPHead.load(args.baseline, device="cpu")
+    else:
+        base = None
+    if base is not None and base.cfg["d"] != Xtr.shape[1]:
+        print(f"baseline {args.baseline} was trained on another model's latents; not scoring it", file=sys.stderr)
+    elif base is not None:
         report["baseline"] = {
             name: {"trained_head": accuracy(base.predict(X), gold, qid)}
             for name, (recs, X, gold, qid, keys) in splits.items()

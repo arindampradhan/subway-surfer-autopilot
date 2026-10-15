@@ -9,6 +9,7 @@ use image::{GrayImage, RgbImage};
 use serde::{Deserialize, Serialize};
 
 use super::GameState;
+use super::hud::HudConfig;
 
 pub const LANE_NAMES: [&str; 3] = ["L", "C", "R"];
 pub const BAND_NAMES: [&str; 3] = ["near", "mid", "far"];
@@ -161,6 +162,9 @@ pub struct Thresholds {
     /// Whole-frame mean change (0..1) below this while running counts as frozen.
     pub frozen_change_max: f32,
     pub frozen_frames_crash: u32,
+    /// Frames after switching to roof zones with different geometry during which every zone
+    /// reads Unknown: the camera is still rising, so neither zone set fits yet (~300 ms at 58 fps).
+    pub roof_settle_frames: u32,
 }
 
 impl Default for Thresholds {
@@ -187,6 +191,7 @@ impl Default for Thresholds {
             white_frac_ad: 0.60,
             frozen_change_max: 0.004,
             frozen_frames_crash: 6,
+            roof_settle_frames: 18,
         }
     }
 }
@@ -214,6 +219,17 @@ pub struct Calibration {
     /// replaces the threshold rules for obstacle classes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_model: Option<String>,
+    /// Zones calibrated from roof frames: the camera rides higher on a roof, so the ground zones
+    /// look at roofs and buildings. Used while the runner is on a roof; `None` keeps the ground set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roof_lanes: Option<[LaneZones; 3]>,
+    /// Frame classifier for the runner's level (`sidecar/level_cnn.py`), relative to this file.
+    /// Without it the level is `Air` when the sprite reads airborne, else `Ground`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_model: Option<String>,
+    /// The power-up timer in the bottom-left HUD.
+    #[serde(default)]
+    pub hud: HudConfig,
 }
 
 fn default_baseline() -> f32 {
@@ -261,11 +277,22 @@ impl Default for Calibration {
             canvas_center: default_canvas_center(),
             thresholds: Thresholds::default(),
             zone_model: None,
+            roof_lanes: None,
+            level_model: None,
+            hud: HudConfig::default(),
         }
     }
 }
 
 impl Calibration {
+    /// The zone set for a level: the roof set on a roof when calibrated, else the ground set.
+    pub fn lanes_for(&self, level: super::Level) -> [LaneZones; 3] {
+        match (level, self.roof_lanes) {
+            (super::Level::Roof, Some(roof)) => roof,
+            _ => self.lanes,
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))

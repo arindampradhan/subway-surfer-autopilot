@@ -6,6 +6,7 @@ canvas_center = [
     0.5,
 ]
 zone_model = "zone_model.json"
+level_model = "level_model.json"
 
 [[lanes]]
 near = [
@@ -321,3 +322,95 @@ black_frac_adbreak = 0.85
 white_frac_ad = 0.6
 frozen_change_max = 0.004
 frozen_frames_crash = 6
+
+# Power-up timer in the bottom-left HUD (SPEC-roofs-and-powerups §4.3). Icons named from
+# clusters of 8,157 mined timer frames (sidecar/hud_icons.py, 2026-10-15). The multiplier (a gold
+# star, no blue frame) was found later in a labelled frame; no pogo-stick timer has been seen.
+[hud]
+bar_white_min = 0.3
+icon_blue_min = 0.15
+
+[hud.bar]
+x = 0.06
+y = 0.925
+w = 0.11
+h = 0.05
+
+[hud.icon]
+x = 0.012
+y = 0.92
+w = 0.036
+h = 0.062
+
+[[hud.icons]]
+powerup = "SuperSneakers"
+reference = "calibration/hud_supersneakers_0.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "SuperSneakers"
+reference = "calibration/hud_supersneakers_3.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "SuperSneakers"
+reference = "calibration/hud_supersneakers_5.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Jetpack"
+reference = "calibration/hud_jetpack_2.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Jetpack"
+reference = "calibration/hud_jetpack_6.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Hoverboard"
+reference = "calibration/hud_hoverboard_4.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Magnet"
+reference = "calibration/hud_magnet_1.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Magnet"
+reference = "calibration/hud_magnet_7.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Magnet"
+reference = "calibration/hud_magnet_8.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Magnet"
+reference = "calibration/hud_magnet_9.jpg"
+max_diff = 15.0
+
+[[hud.icons]]
+powerup = "Multiplier"
+reference = "calibration/hud_multiplier_0.jpg"
+max_diff = 15.0
+
+# Roof zones (SPEC-roofs-and-powerups §4.3): a copy of the ground set. Previews on 8 mined roof
+# frames (data/mined/roof_preview, 2026-10-15) showed the camera keeps its offset above the
+# runner, so the ground geometry sits on the roofs too. Kept separate so it can be tuned.
+[[roof_lanes]]
+near = [[0.314, 0.56], [0.4112, 0.56], [0.3961, 0.67], [0.2656, 0.67]]
+mid = [[0.3537, 0.47], [0.4235, 0.47], [0.4112, 0.56], [0.314, 0.56]]
+far = [[0.3889, 0.39], [0.4345, 0.39], [0.4235, 0.47], [0.3537, 0.47]]
+
+[[roof_lanes]]
+near = [[0.4244, 0.56], [0.5216, 0.56], [0.5445, 0.67], [0.4139, 0.67]]
+mid = [[0.4331, 0.47], [0.5028, 0.47], [0.5216, 0.56], [0.4244, 0.56]]
+far = [[0.4407, 0.39], [0.4862, 0.39], [0.5028, 0.47], [0.4331, 0.47]]
+
+[[roof_lanes]]
+near = [[0.5348, 0.56], [0.6321, 0.56], [0.6929, 0.67], [0.5623, 0.67]]
+mid = [[0.5124, 0.47], [0.5822, 0.47], [0.6321, 0.56], [0.5348, 0.56]]
+far = [[0.4924, 0.39], [0.538, 0.39], [0.5822, 0.47], [0.5124, 0.47]]

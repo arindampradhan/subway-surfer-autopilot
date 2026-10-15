@@ -34,3 +34,17 @@ __pycache__/
 /models/*.log
 /models/*.err
 .claude
+
+# images: never tracked, except the few the bot, tests and README need
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.tif
+*.tiff
+!/calibration/*.jpg
+!/calibration/*.png
+!/crates/lab/tests/fixtures/**
+!/docs/media/**

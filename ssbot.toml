@@ -25,6 +25,10 @@ use_hoverboard = false # Space with 0 hoverboards opens a shop dialog that pause
 
 [advisor]
 enabled = true
+# "0.8b" / "2b" / "4b" (OpenJev), "embeddinggemma" (needs head = "models/head-embeddinggemma")
+# or "clef-flash" (ignores head; the Hugging Face release on MLX, 4-bit, or with backend =
+# "workers-ai" Cloudflare's hosted model, which needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN).
+# `sidecar/compare_advisors.py` scores them side by side.
 model = "0.8b"
 backend = "mlx"
 python = "../.venv/bin/python"

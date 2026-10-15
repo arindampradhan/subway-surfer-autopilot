@@ -1,0 +1,31 @@
+{
+ "roof": {
+  "frames": [
+   "runs/20261006-032452.412/frames/16005.jpg",
+   "runs/20261005-041856.952/frames/6168.jpg",
+   "runs/20261005-041856.952/frames/6141.jpg",
+   "runs/20261006-194241.788/frames/1885.jpg",
+   "runs/20261005-041856.952/frames/11508.jpg",
+   "runs/20261005-041856.952/frames/11526.jpg",
+   "runs/20261005-041856.952/frames/11475.jpg",
+   "runs/20261006-011159.330/frames/4269.jpg",
+   "runs/20261009-162109.287/frames/456.jpg"
+  ],
+  "texts": [
+   "a runner on top of a train roof, seen from above"
+  ]
+ },
+ "ramp": {
+  "frames": [
+   "runs/20261006-043609.583/frames/16875.jpg",
+   "runs/20261006-095330.470/frames/8667.jpg",
+   "runs/20261006-095634.113/frames/19650.jpg",
+   "runs/20261006-034014.913/frames/20737.jpg",
+   "runs/20261005-041856.952/frames/4179.jpg",
+   "runs/20261006-042055.991/frames/1818.jpg"
+  ],
+  "texts": [
+   "a wooden ramp leading up onto a train"
+  ]
+ }
+}

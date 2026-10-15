@@ -1,4 +1,10 @@
-"""OpenJev inference sidecar for ssbot (SPEC §4.6). JSON lines on stdin/stdout.
+"""Advisor inference sidecar for ssbot (SPEC §4.6). JSON lines on stdin/stdout.
+
+`--model` picks the advisor:
+  0.8b / 2b / 4b   OpenJev, an NLI cross-encoder, on MLX or torch; zero-shot or with a head
+  embeddinggemma   EmbeddingGemma 2, a bi-encoder (embeddinggemma.py); needs a trained head
+  clef-flash       Cloudflare's Clef Flash decision model, zero-shot: the Hugging Face release on
+                   MLX (mlx_clef.py), or Cloudflare's hosted one with --backend workers-ai
 
 Requests (one per line):
   {"type":"decide","id":42,"premise":"Subway run. ...","options":{"left":"Left is the best move because it ...", ...}}
@@ -29,32 +35,63 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 REPO = "AlexWortega/openjev"
 MODELS = {"4b": "qwen3.5-4b-nli-v5", "2b": "qwen3.5-2b-nli-v5", "0.8b": "qwen3.5-0.8b-nli-v2s-long"}
+ADVISORS = [*MODELS, "embeddinggemma", "clef-flash"]
+
+
+def encoder(model: str, backend: str = "mlx"):
+    """The frozen model a decision head is trained on: anything with `latents_hypotheses`."""
+    if model == "embeddinggemma":
+        from embeddinggemma import EmbeddingGemma
+
+        return EmbeddingGemma()
+    if backend == "mlx":
+        from mlx_openjev import MlxOpenJev
+
+        return MlxOpenJev(REPO, MODELS[model])
+    import torch
+
+    from modeling_openjev import OpenJevCrossEncoder
+
+    device = "mps" if torch.backends.mps.is_available() else None
+    return OpenJevCrossEncoder(REPO, subfolder=MODELS[model], device=device)
 
 
 class Engine:
     def __init__(self, model: str, backend: str, head: str = ""):
-        self.name = f"OpenJev {model.upper()}" + (" + trained head" if head else "")
+        self.head = self.remote = None
+        if model == "clef-flash":
+            if head:
+                print(f"clef-flash is zero-shot; ignoring head {head}", file=sys.stderr)
+            if backend == "workers-ai":
+                from clef_flash import ClefFlash
+
+                self.name, self.backend, self.remote = "Clef Flash", "workers-ai", ClefFlash()
+            else:
+                from mlx_clef import MlxClef
+
+                self.name, self.backend, self.remote = "Clef Flash (local, 4-bit)", "mlx", MlxClef()
+            return
+        if model == "embeddinggemma":
+            if not head:
+                sys.exit("embeddinggemma needs a trained head: train_head.py --model embeddinggemma")
+            backend = "torch"  # sentence-transformers on MPS
+        self.name = ("EmbeddingGemma 2" if model == "embeddinggemma" else f"OpenJev {model.upper()}") + (
+            " + trained head" if head else ""
+        )
         self.backend = backend
-        self.head = None
+        self.ce = encoder(model, backend)
         if head:
             # Decision head trained by train_head.py on the frozen model's latents.
             from modeling_openjev import LatentMLPHead
 
             self.head = LatentMLPHead.load(head, device="cpu")
-        if backend == "mlx":
-            from mlx_openjev import ENT, MlxOpenJev
-
-            self.ce = MlxOpenJev(REPO, MODELS[model])
-        else:
-            import torch
-
-            from modeling_openjev import ENT, OpenJevCrossEncoder
-
-            device = "mps" if torch.backends.mps.is_available() else None
-            self.ce = OpenJevCrossEncoder(REPO, subfolder=MODELS[model], device=device)
-        self.entailment = ENT
+            d = self.ce.latents_hypotheses("Subway run.", ["Stay is the best move."]).shape[1]
+            if self.head.cfg["d"] != d:
+                sys.exit(f"head {head} takes {self.head.cfg['d']}-d latents but {model} gives {d}; train one for {model}")
 
     def probabilities(self, premise: str, options: dict) -> dict:
+        if self.remote is not None:
+            return self.remote.probabilities(premise, options)
         keys = sorted(options)
         hyps = [options[k] for k in keys]
         if self.head is not None:
@@ -63,7 +100,9 @@ class Engine:
             logits = self.head.predict(self.ce.latents_hypotheses(premise, hyps))
             e = np.exp(logits - logits.max())
             return {k: round(float(p), 4) for k, p in zip(keys, e / e.sum())}
-        ent = self.ce.predict_hypotheses(premise, hyps)[:, self.entailment]
+        from modeling_openjev import ENT
+
+        ent = self.ce.predict_hypotheses(premise, hyps)[:, ENT]
         total = max(float(ent.sum()), 1e-9)
         return {k: round(float(p) / total, 4) for k, p in zip(keys, ent)}
 
@@ -85,17 +124,17 @@ def cache_key(premise: str, options: dict) -> tuple:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", choices=MODELS, default="0.8b")
-    parser.add_argument("--backend", choices=["mlx", "torch"], default="mlx")
-    parser.add_argument("--head", default="", help="trained decision head directory (train_head.py); mlx only")
+    parser.add_argument("--model", choices=ADVISORS, default="0.8b")
+    parser.add_argument("--backend", choices=["mlx", "torch", "workers-ai"], default="mlx", help="OpenJev: mlx or torch; clef-flash: mlx (local) or workers-ai")
+    parser.add_argument("--head", default="", help="trained decision head directory (train_head.py)")
     args = parser.parse_args()
 
     t0 = time.perf_counter()
     engine = Engine(args.model, args.backend, args.head)
     # Warm-up pass so the first real decision doesn't pay for kernel compilation.
     engine.probabilities("Subway run.", {"stay": "Stay is the best move.", "left": "Left is the best move."})
-    print(f"loaded {engine.name} ({args.backend}) in {time.perf_counter() - t0:.1f} s", file=sys.stderr)
-    reply({"type": "ready", "model": engine.name, "backend": args.backend})
+    print(f"loaded {engine.name} ({engine.backend}) in {time.perf_counter() - t0:.1f} s", file=sys.stderr)
+    reply({"type": "ready", "model": engine.name, "backend": engine.backend})
 
     lines = queue.Queue()
     threading.Thread(target=read_lines, args=(sys.stdin, lines), daemon=True).start()

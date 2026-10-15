@@ -90,6 +90,18 @@ pub struct PolicyConfig {
     /// hoverboards in stock, Space opens a "Need hoverboards? 300 coins" shop dialog that
     /// pauses the game (seen live, 2026-10-05).
     pub use_hoverboard: bool,
+    /// Jump length with super sneakers active (they jump higher and further; a jump clears a
+    /// train and lands on its roof). A starting value; measure it from mined frames.
+    pub sneakers_jump_ms: u64,
+    /// Score taken off a lane change that drops from a roof to the track: allowed, but staying
+    /// on the roofs is preferred.
+    pub roof_drop_penalty: f32,
+    /// Score for a lane with a power-up item, relative to a lane with coins (1.0).
+    pub powerup_weight: f32,
+    /// Press Space once when nothing else is safe, to find out whether hoverboards are in
+    /// stock: the shop dialog appearing means none for the rest of the session
+    /// (SPEC-roofs-and-powerups §4.4).
+    pub hoverboard_probe: bool,
 }
 
 impl Default for PolicyConfig {
@@ -104,6 +116,10 @@ impl Default for PolicyConfig {
             lookahead_ms: 700,
             initial_speed_bands_per_s: 4.5,
             use_hoverboard: false,
+            sneakers_jump_ms: 900,
+            roof_drop_penalty: 0.5,
+            powerup_weight: 2.0,
+            hoverboard_probe: false,
         }
     }
 }

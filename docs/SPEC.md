@@ -3,6 +3,10 @@
 Status: code implemented (all modules in §6, CLI in §7); M0 partly answered (§10.2); M1–M5 need live
 runs, labels and the terms check, see [§12](#12-implementation-status). Owner: apradhan. Date: 2026-10-05.
 
+**Extended by [SPEC-roofs-and-powerups.md](SPEC-roofs-and-powerups.md)** (2026-10-15): the runner's level
+(ground, roof, air), roof zones, the HUD power-up timer, level- and power-up-aware reflexes, and the label
+schema and facts that go with them.
+
 A Rust program that opens [Subway Surfers on Poki](https://poki.com/en/g/subway-surfers) in Chrome,
 watches the game frame by frame, and plays it. Fast Rust code does perception and reflexes, and the
 OpenJev decision model picks moves when there's time. It builds on the tic-tac-toe experiment in

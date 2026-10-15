@@ -164,10 +164,12 @@ mod tests {
                 .into_iter()
                 .map(|z| {
                     let o = set.iter().find(|(id, _)| *id == z).map(|(_, o)| *o).unwrap_or(Obstacle::Free);
-                    ZoneLabel { zone: z, obstacle: o, coins: false, powerup: false, sure: true }
+                    ZoneLabel { zone: z, obstacle: o, coins: false, powerup: false, sure: true, powerup_kind: "unknown".into() }
                 })
                 .collect(),
             notes: String::new(),
+            runner_level: "ground".into(),
+            active_powerup: "none".into(),
         }
     }
 

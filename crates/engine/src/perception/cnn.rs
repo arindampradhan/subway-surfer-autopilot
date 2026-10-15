@@ -55,21 +55,21 @@ pub fn zone_input(img: &RgbImage, mask: &ZoneMask, size: usize, ctx: f32, dual: 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ConvLayer {
+pub(crate) struct ConvLayer {
     /// `[out][in][3][3]`, flattened.
-    w: Vec<f32>,
-    b: Vec<f32>,
-    cin: usize,
-    cout: usize,
+    pub(crate) w: Vec<f32>,
+    pub(crate) b: Vec<f32>,
+    pub(crate) cin: usize,
+    pub(crate) cout: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Dense {
+pub(crate) struct Dense {
     /// `[out][in]`, flattened.
-    w: Vec<f32>,
-    b: Vec<f32>,
-    din: usize,
-    dout: usize,
+    pub(crate) w: Vec<f32>,
+    pub(crate) b: Vec<f32>,
+    pub(crate) din: usize,
+    pub(crate) dout: usize,
 }
 
 /// Conv(3×3, same) → ReLU → max-pool(2), three times (batch norm folded into the convs), then
@@ -161,6 +161,40 @@ fn dense(x: &[f32], l: &Dense, relu: bool) -> Vec<f32> {
         .collect()
 }
 
+/// The shared forward pass: HWC byte crops (one or more `crop`×`crop`×3 views, stacked as
+/// channels) → logits.
+pub(crate) fn logits(convs: &[ConvLayer], fc1: &Dense, fc2: &Dense, crop: usize, input: &[u8]) -> Vec<f32> {
+    let n = crop;
+    let views = input.len() / (n * n * 3);
+    let mut x = vec![0.0f32; 3 * views * n * n];
+    for v in 0..views {
+        let view = &input[v * n * n * 3..(v + 1) * n * n * 3];
+        for (i, px) in view.chunks_exact(3).enumerate() {
+            for c in 0..3 {
+                x[(v * 3 + c) * n * n + i] = px[c] as f32 / 255.0;
+            }
+        }
+    }
+    let mut size = n;
+    for l in convs {
+        x = conv_relu_pool(&x, size, l);
+        size /= 2;
+    }
+    dense(&dense(&x, fc1, true), fc2, false)
+}
+
+/// Index and probability of the largest logit after adding `bias`.
+pub(crate) fn argmax_softmax(mut logits: Vec<f32>, bias: &[f32]) -> (usize, f32) {
+    for (l, b) in logits.iter_mut().zip(bias) {
+        *l += b;
+    }
+    let m = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let exp: Vec<f32> = logits.iter().map(|z| (z - m).exp()).collect();
+    let sum: f32 = exp.iter().sum();
+    let (i, p) = exp.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
+    (i, p / sum)
+}
+
 impl ZoneCnn {
     pub fn ctx_for(&self, band: usize) -> f32 {
         if band == 2 { self.ctx_far.unwrap_or(self.ctx) } else { self.ctx }
@@ -178,32 +212,8 @@ impl ZoneCnn {
 
     /// Class and probability for one input from `zone_input`.
     pub fn predict(&self, input: &[u8]) -> (Obstacle, f32) {
-        // One or two HWC crops -> CHW floats in 0..1 (the second crop's channels come after).
-        let n = self.crop;
-        let views = input.len() / (n * n * 3);
-        let mut x = vec![0.0f32; 3 * views * n * n];
-        for v in 0..views {
-            let crop = &input[v * n * n * 3..(v + 1) * n * n * 3];
-            for (i, px) in crop.chunks_exact(3).enumerate() {
-                for c in 0..3 {
-                    x[(v * 3 + c) * n * n + i] = px[c] as f32 / 255.0;
-                }
-            }
-        }
-        let mut size = n;
-        for l in &self.convs {
-            x = conv_relu_pool(&x, size, l);
-            size /= 2;
-        }
-        let mut logits = dense(&dense(&x, &self.fc1, true), &self.fc2, false);
-        for (l, b) in logits.iter_mut().zip(&self.bias) {
-            *l += b;
-        }
-        let m = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let exp: Vec<f32> = logits.iter().map(|z| (z - m).exp()).collect();
-        let sum: f32 = exp.iter().sum();
-        let (i, p) = exp.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
-        (self.classes[i], p / sum)
+        let (i, p) = argmax_softmax(logits(&self.convs, &self.fc1, &self.fc2, self.crop, input), &self.bias);
+        (self.classes[i], p)
     }
 }
 

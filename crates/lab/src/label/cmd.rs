@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 
 use ssbot_engine::perception::zones::Calibration;
-use ssbot_engine::perception::{GameState, Perceiver};
+use ssbot_engine::perception::{GameState, Perceiver, PowerUp};
 use ssbot_runtime::recorder::read_events;
 
 use super::batch::{Answer, Client, MAX_BATCH_REQUESTS, Outcome, cost_usd, label_params};
@@ -232,6 +232,7 @@ fn prefill(p: &mut Perceiver, id: u64, path: &Path) -> Result<super::FrameLabel>
             coins: obs.lanes[l].coins,
             powerup: obs.lanes[l].powerup,
             sure: true,
+            powerup_kind: "unknown".into(),
         })
         .collect();
     Ok(super::FrameLabel {
@@ -240,6 +241,14 @@ fn prefill(p: &mut Perceiver, id: u64, path: &Path) -> Result<super::FrameLabel>
         player_action: if obs.airborne { "jumping" } else if obs.rolling { "rolling" } else { "running" }.into(),
         zones,
         notes: String::new(),
+        runner_level: format!("{:?}", obs.level).to_lowercase(),
+        active_powerup: match obs.active_powerup {
+            None => "none".into(),
+            Some(PowerUp::SuperSneakers) => "super_sneakers".into(),
+            Some(PowerUp::PogoStick) => "pogo_stick".into(),
+            Some(PowerUp::Other) => "unknown".into(),
+            Some(p) => format!("{p:?}").to_lowercase(),
+        },
     })
 }
 
